@@ -1,0 +1,90 @@
+# =========================
+# OS / Editor
+# =========================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# VSCode / JetBrains
+.vscode/
+.idea/
+*.iml
+
+# =========================
+# React Native / Metro / Node
+# =========================
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.metro-health-check*
+/coverage
+
+# =========================
+# Android / Gradle
+# =========================
+android/.gradle/
+android/local.properties
+android/**/build/
+android/.cxx/
+android/**/*.hprof
+
+# Keystores / signing / secrets (NEVER COMMIT)
+*.keystore
+*.jks
+*.p12
+*.pem
+*.mobileprovision
+
+android/app/debug.keystore
+
+# Android signing props (NEVER COMMIT)
+android/gradle.properties
+
+# =========================
+# iOS / Xcode
+# =========================
+ios/Pods/
+ios/**/build/
+ios/DerivedData/
+ios/xcuserdata/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+*.xccheckout
+*.moved-aside
+*.xcuserstate
+**/.xcode.env.local
+
+# (옵션) 보통 커밋 안 하는 편
+ios/.xcode.env
+
+# =========================
+# Firebase (NEVER COMMIT real configs)
+# =========================
+android/app/google-services.json
+ios/GoogleService-Info.plist
+ios/**/GoogleService-Info.plist
+
+# (추천) 템플릿은 커밋 허용
+!android/app/google-services.json.example
+!ios/GoogleService-Info.plist.example
+!ios/**/GoogleService-Info.plist.example
+
+# =========================
+# App local config
+# =========================
+# do not commit real server url
+src/config/api.ts
+
+# env files (if you use later)
+.env
+*.env
+
+android/**/.cxx/

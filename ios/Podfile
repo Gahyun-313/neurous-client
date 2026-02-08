@@ -1,0 +1,68 @@
+# Resolve react_native_pods.rb with node to allow for hoisting
+def node_require(script)
+  # Resolve script with node to allow for hoisting
+  require Pod::Executable.execute_command('node', ['-p',
+    "require.resolve(
+      '#{script}',
+      {paths: [process.argv[1]]},
+    )", __dir__]).strip
+end
+
+node_require('react-native/scripts/react_native_pods.rb')
+node_require('react-native-permissions/scripts/setup.rb')
+
+platform :ios, '15.1'
+
+ENV['RNFirebaseAsStaticFramework'] = 'true'
+prepare_react_native_project!
+
+# react-native-permissions 설정 (use_native_modules! 전에 호출)
+setup_permissions([
+  'Notifications',
+  'AppTrackingTransparency',
+])
+
+linkage = ENV['USE_FRAMEWORKS']
+if linkage != nil
+  Pod::UI.puts "Configuring Pod with #{linkage}ally linked Frameworks".green
+  use_frameworks! :linkage => linkage.to_sym
+else
+  use_frameworks! :linkage => :static
+  use_modular_headers!
+end
+
+target 'Neurous' do
+  begin
+    config = use_native_modules!
+    react_native_path = config && config[:reactNativePath] ? config[:reactNativePath] : '../node_modules/react-native'
+  rescue => e
+    Pod::UI.warn "use_native_modules! failed: #{e.message}"
+    Pod::UI.warn "Using default React Native path"
+    react_native_path = '../node_modules/react-native'
+    config = { :reactNativePath => react_native_path }
+  end
+
+  use_react_native!(
+    :path => react_native_path,
+    # An absolute path to your application root.
+    :app_path => "#{Pod::Config.instance.installation_root}/.."
+  )
+
+  post_install do |installer|
+    react_native_post_install(
+      installer,
+      react_native_path,
+      :mac_catalyst_enabled => false,
+      # :ccache_enabled => true
+    )
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |config|
+        config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.1'
+        # Hermes dSYM 생성을 위한 설정
+        if target.name == 'hermes-engine'
+          config.build_settings['DEBUG_INFORMATION_FORMAT'] = 'dwarf-with-dsym'
+        end
+      end
+    end
+  end
+end

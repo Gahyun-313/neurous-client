@@ -1,0 +1,50 @@
+diff --git a/node_modules/@react-native/community-cli-plugin/dist/commands/start/runServer.js b/node_modules/@react-native/community-cli-plugin/dist/commands/start/runServer.js
+index 8a2260f..180d5dc 100644
+--- a/node_modules/@react-native/community-cli-plugin/dist/commands/start/runServer.js
++++ b/node_modules/@react-native/community-cli-plugin/dist/commands/start/runServer.js
+@@ -22,6 +22,12 @@ var _metroCore = require("metro-core");
+ var _path = _interopRequireDefault(require("path"));
+ var _url = _interopRequireDefault(require("url"));
+ var _util = require("util");
++// Polyfill for styleText if not available
++if (!_util.styleText) {
++  _util.styleText = function (color, text) {
++    return text;
++  };
++}
+ function _interopRequireWildcard(e, t) {
+   if ("function" == typeof WeakMap)
+     var r = new WeakMap(),
+@@ -43,7 +49,7 @@ function _interopRequireWildcard(e, t) {
+         ((i =
+           (o = Object.defineProperty) &&
+           Object.getOwnPropertyDescriptor(e, t)) &&
+-        (i.get || i.set)
++          (i.get || i.set)
+           ? o(f, t, i)
+           : (f[t] = e[t]));
+     return f;
+@@ -92,7 +98,7 @@ async function runServer(_argv, cliConfig, args) {
+   } else if (serverStatus === "port_taken") {
+     console.error(
+       `${(0, _util.styleText)("red", "error")}: Another process is running on port ${port}. Please terminate this ` +
+-        'process and try again, or use another port with "--port".',
++      'process and try again, or use another port with "--port".',
+     );
+     return;
+   }
+@@ -120,10 +126,10 @@ async function runServer(_argv, cliConfig, args) {
+     watchFolders,
+   });
+   const { middleware, websocketEndpoints } = (0,
+-  _devMiddleware.createDevMiddleware)({
+-    serverBaseUrl: devServerUrl,
+-    logger: (0, _createDevMiddlewareLogger.default)(terminalReporter),
+-  });
++    _devMiddleware.createDevMiddleware)({
++      serverBaseUrl: devServerUrl,
++      logger: (0, _createDevMiddlewareLogger.default)(terminalReporter),
++    });
+   metroConfig.reporter = {
+     update(event) {
+       terminalReporter.update(event);

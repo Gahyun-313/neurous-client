@@ -1,0 +1,10 @@
+{
+  "extends": "@react-native/typescript-config/tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-native",
+    "typeRoots": ["./node_modules/@types", "./src/types"],
+
+    "esModuleInterop": true
+  },
+  "include": ["src/**/*", "declarations.d.ts", "__tests__/**/*"]
+}

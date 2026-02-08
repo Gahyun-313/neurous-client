@@ -1,0 +1,70 @@
+{
+  "project_info": {
+    "project_number": "REPLACE_ME",
+    "project_id": "neurous-d632a",
+    "storage_bucket": "neurous-d632a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "REPLACE_ME",
+        "android_client_info": {
+          "package_name": "io.neurous.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "REPLACE_ME.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "io.neurous.app",
+            "certificate_hash": "REPLACE_ME"
+          }
+        },
+        {
+          "client_id": "REPLACE_ME.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "io.neurous.app",
+            "certificate_hash": "REPLACE_ME"
+          }
+        },
+        {
+          "client_id": "REPLACE_ME.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "io.neurous.app",
+            "certificate_hash": "REPLACE_ME"
+          }
+        },
+        {
+          "client_id": "REPLACE_ME.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "REPLACE_ME"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "REPLACE_ME.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "REPLACE_ME.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "io.neurous.app"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
