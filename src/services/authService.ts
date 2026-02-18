@@ -1,6 +1,13 @@
 /**
- * 인증 관련 서비스
- * 서버 API 연동 시 이 파일을 수정하여 실제 인증 로직 구현
+ * 인증 관련 서비스 (authService.ts)
+ *
+ * JWT 토큰, 사용자 정보의 로컬 저장/조회/삭제와
+ * 로그아웃 및 회원 탈퇴 흐름을 담당한다.
+ *
+ * AsyncStorage 키 구조:
+ *   @auth_token    - 서버 발급 액세스 토큰
+ *   @refresh_token - 서버 발급 리프레시 토큰
+ *   @user_info     - 사용자 정보 JSON (userId, provider, 소셜 토큰 등 포함)
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -17,23 +24,39 @@ export interface AuthStatus {
   userInfo?: RecentLoginInfo;
 }
 
+// ──────────────────────────────────────────────
+// AsyncStorage 키 상수
+// 여러 함수에서 공통으로 참조하므로 상수로 관리
+// ──────────────────────────────────────────────
+const AUTH_TOKEN_KEY = '@auth_token';
+const REFRESH_TOKEN_KEY = '@refresh_token';
+const USER_INFO_KEY = '@user_info';
+
+// ──────────────────────────────────────────────
+// 인증 상태 확인
+// ──────────────────────────────────────────────
+
 /**
- * 현재 인증 상태 확인
- * @returns Promise<AuthStatus>
+ * 현재 인증 상태를 확인한다.
+ *
+ * 서버에 별도 토큰 검증 요청을 보내지 않고,
+ * AsyncStorage에 저장된 사용자 정보 존재 여부만으로 판단한다.
+ *
+ * 참고: 실제 토큰 유효성 검증은 API 요청 시 서버가 401/403을 반환하면
+ *       client.ts의 Axios 인터셉터가 자동으로 리프레시 토큰으로 재발급하거나 로그아웃 처리한다.
+ *
+ * @returns isAuthenticated - 로컬에 사용자 정보가 있으면 true
+ * @returns userInfo        - 저장된 최근 로그인 정보 (없으면 undefined)
  */
 export const checkAuthStatus = async (): Promise<AuthStatus> => {
   try {
-    // 1. 로컬 스토리지에서 최근 로그인 정보 확인
     const recentLogin = await getRecentLogin();
 
+    // 로컬에 로그인 정보가 없으면 미인증 상태로 간주
     if (!recentLogin) {
       return { isAuthenticated: false };
     }
 
-    // TODO: 서버 API로 토큰 검증 (필요 시 구현)
-    // 현재는 API 호출 시 서버가 401/403을 반환하면 client.ts의 인터셉터에서 처리
-
-    // 현재는 로컬 정보만 확인
     return {
       isAuthenticated: true,
       userInfo: recentLogin,
@@ -44,25 +67,29 @@ export const checkAuthStatus = async (): Promise<AuthStatus> => {
   }
 };
 
-const AUTH_TOKEN_KEY = '@auth_token';
-const REFRESH_TOKEN_KEY = '@refresh_token';
-const USER_INFO_KEY = '@user_info';
+// ──────────────────────────────────────────────
+// 토큰 저장/조회
+// ──────────────────────────────────────────────
 
 /**
- * 인증 토큰 저장
- * @param token 인증 토큰
+ * 액세스 토큰을 AsyncStorage에 저장한다.
+ * 소셜 로그인 성공 후 서버에서 발급받은 JWT를 보관할 때 사용한다.
+ *
+ * @param token 서버 발급 JWT 액세스 토큰
  */
 export const saveAuthToken = async (token: string): Promise<void> => {
   try {
-    await AsyncStorage.setItem('@auth_token', token);
+    await AsyncStorage.setItem(AUTH_TOKEN_KEY, token);
   } catch (error) {
     console.error('토큰 저장 실패:', error);
   }
 };
 
 /**
- * 리프레시 토큰 저장
- * @param refreshToken 리프레시 토큰
+ * 리프레시 토큰을 AsyncStorage에 저장한다.
+ * 액세스 토큰 만료 시 client.ts 인터셉터가 이 값으로 재발급을 시도한다.
+ *
+ * @param refreshToken 서버 발급 리프레시 토큰
  */
 export const saveRefreshToken = async (refreshToken: string): Promise<void> => {
   try {
@@ -73,8 +100,10 @@ export const saveRefreshToken = async (refreshToken: string): Promise<void> => {
 };
 
 /**
- * 리프레시 토큰 조회
- * @returns Promise<string | null>
+ * AsyncStorage에서 리프레시 토큰을 조회한다.
+ * 주로 client.ts의 Axios 인터셉터에서 액세스 토큰 재발급 시 호출한다.
+ *
+ * @returns 저장된 리프레시 토큰 문자열 (없으면 null)
  */
 export const getRefreshToken = async (): Promise<string | null> => {
   try {
@@ -85,9 +114,21 @@ export const getRefreshToken = async (): Promise<string | null> => {
   }
 };
 
+// ──────────────────────────────────────────────
+// 사용자 정보 저장/조회/삭제
+// ──────────────────────────────────────────────
+
 /**
- * 사용자 정보 저장 (provider, loginTime 포함)
- * @param userInfo 사용자 정보
+ * 사용자 정보를 AsyncStorage에 JSON 형태로 저장한다.
+ *
+ * 저장 항목:
+ *   - userId              : 서버에서 발급한 사용자 고유 ID
+ *   - provider            : 소셜 로그인 제공자 (GOOGLE | KAKAO | NAVER | APPLE)
+ *   - providerAccessToken : 소셜 unlink(탈퇴 시 연결 해제)에 필요한 소셜 액세스 토큰
+ *   - appleAuthorizationCode : Apple 탈퇴 시 필요한 인가 코드 (Apple만 해당)
+ *   - loginTime           : 자동 로그인 만료 기간 계산용 타임스탬프
+ *
+ * @param userInfo 저장할 사용자 정보 객체
  */
 export const saveUserInfo = async (userInfo: {
   userId: number;
@@ -107,8 +148,10 @@ export const saveUserInfo = async (userInfo: {
 };
 
 /**
- * 사용자 정보 조회
- * @returns Promise<UserInfo | null>
+ * AsyncStorage에서 사용자 정보를 조회한다.
+ * 로그아웃, 회원 탈퇴, 레벨 업데이트 등 userId가 필요한 곳에서 호출한다.
+ *
+ * @returns 파싱된 사용자 정보 객체 (저장값 없거나 오류 시 null)
  */
 export const getUserInfo = async (): Promise<{
   userId: number;
@@ -133,12 +176,14 @@ export const getUserInfo = async (): Promise<{
 };
 
 /**
- * 인증 토큰 조회
- * @returns Promise<string | null>
+ * AsyncStorage에서 액세스 토큰을 조회한다.
+ * API 요청 시 Authorization 헤더에 삽입할 토큰을 가져올 때 사용한다.
+ *
+ * @returns 저장된 액세스 토큰 문자열 (없으면 null)
  */
 export const getAuthToken = async (): Promise<string | null> => {
   try {
-    return await AsyncStorage.getItem('@auth_token');
+    return await AsyncStorage.getItem(AUTH_TOKEN_KEY);
   } catch (error) {
     console.error('토큰 조회 실패:', error);
     return null;
@@ -146,7 +191,8 @@ export const getAuthToken = async (): Promise<string | null> => {
 };
 
 /**
- * 사용자 정보 삭제 (로그아웃 시)
+ * AsyncStorage에서 사용자 정보(@user_info)를 삭제한다.
+ * 로그아웃 시 단독으로 사용하거나, clearAllAuthData에서 내부 호출한다.
  */
 export const clearUserInfo = async (): Promise<void> => {
   try {
@@ -156,20 +202,32 @@ export const clearUserInfo = async (): Promise<void> => {
   }
 };
 
+// ──────────────────────────────────────────────
+// 로그아웃
+// ──────────────────────────────────────────────
+
 /**
- * 로그아웃 - 모든 로그인 정보 및 온보딩 상태 초기화
- * @param provider 소셜 로그인 제공자
+ * 로그아웃을 처리한다. 다음 순서로 실행된다:
+ *
+ *   0. AsyncStorage에서 userId와 provider를 미리 읽어둔다 (삭제 전에 확보)
+ *   1. 서버에 로그아웃 요청 → 리프레시 토큰 무효화
+ *      (실패하더라도 로컬 로그아웃은 반드시 진행)
+ *   2. 소셜 SDK 로그아웃 (구글/카카오/네이버 세션 종료)
+ *   3. AsyncStorage의 토큰 3종 + 사용자 정보 일괄 삭제
+ *
+ * @param provider 소셜 로그인 제공자. 생략 시 저장된 userInfo.provider를 사용한다.
+ * @throws 로컬 로그아웃 도중 예상치 못한 오류 발생 시 throw
  */
 export const logout = async (provider?: SocialLoginProvider): Promise<void> => {
   try {
-    // 자동로그인은 "로그인 시 저장된 값(@user_info/@auth_token/@refresh_token)"으로 유지됨
-
-    // 0. 현재 저장된 유저정보에서 userId/provider를 확보 (삭제 전)
+    // 0. 삭제 전에 userId와 provider를 먼저 읽어둠
+    //    (삭제 후에 읽으면 null이 반환되므로 순서 중요)
     const userInfo = await getUserInfo();
-    const resolvedProvider = provider ?? userInfo?.provider;
+    const resolvedProvider = provider ?? userInfo?.provider; // 인자 없으면 저장값 사용
     const userId = userInfo?.userId;
 
-    // 1. 서버 로그아웃 (실패해도 로컬 로그아웃은 진행)
+    // 1. 서버 로그아웃 (리프레시 토큰 무효화)
+    //    실패해도 로컬 로그아웃은 계속 진행 (별도 try-catch로 격리)
     if (userId) {
       try {
         await logoutFromServer(userId);
@@ -180,12 +238,12 @@ export const logout = async (provider?: SocialLoginProvider): Promise<void> => {
       }
     }
 
-    // 2. 소셜 로그인 로그아웃 (구글/카카오/네이버)
+    // 2. 소셜 SDK 로그아웃 (소셜 세션 종료)
     if (resolvedProvider) {
       await signOutSocial(resolvedProvider);
     }
 
-    // 3. 로컬 저장값 삭제 (로그아웃 후 자동로그인 방지)
+    // 3. 로컬 저장값 일괄 삭제 → 자동로그인 방지
     await AsyncStorage.multiRemove([
       AUTH_TOKEN_KEY,
       REFRESH_TOKEN_KEY,
@@ -199,36 +257,53 @@ export const logout = async (provider?: SocialLoginProvider): Promise<void> => {
   }
 };
 
+// ──────────────────────────────────────────────
+// 개발/테스트 유틸
+// ──────────────────────────────────────────────
+
 /**
- * 모든 인증 및 온보딩 정보 초기화 (개발/테스트용)
+ * 로그인 관련 로컬 데이터를 초기화한다. (개발/테스트 전용)
+ *
+ * 온보딩 상태 초기화는 onboardingStore.resetOnboarding()에서 별도 처리한다.
+ * 이 함수는 AsyncStorage의 인증 정보(@user_info)만 삭제한다.
  */
 export const clearAllAuthData = async (): Promise<void> => {
   try {
-    // 사용자 정보 삭제
     await clearUserInfo();
-
-    // 온보딩 상태 초기화는 onboardingStore.resetOnboarding()에서 처리
-    // 이 함수는 authService에서만 처리하므로 여기서는 로그인 정보만 삭제
-
     console.log('모든 인증 정보 초기화 완료');
   } catch (error) {
     console.error('인증 정보 초기화 중 오류:', error);
   }
 };
 
+// ──────────────────────────────────────────────
+// 회원 탈퇴
+// ──────────────────────────────────────────────
+
 /**
- * 회원 탈퇴 (소셜 unlink 포함)
- * - 서버 탈퇴 + unlinkSocial=true 요청
- * - 소셜 SDK 로그아웃 시도
- * - 로컬 토큰/유저정보 삭제 (자동로그인 방지)
+ * 회원 탈퇴를 처리한다. 다음 순서로 실행된다:
+ *
+ *   1. 서버 탈퇴 API 호출 (unlinkSocial: true → 서버가 소셜 연결도 함께 해제)
+ *   2. 소셜 SDK 로그아웃 (실패해도 로컬 정리는 진행)
+ *   3. AsyncStorage 토큰 3종 + 사용자 정보 일괄 삭제
+ *
+ * 소셜 제공자별 unlink 토큰 전략:
+ *   - GOOGLE : signInSilently()로 토큰을 재발급받아 최신 accessToken을 확보
+ *   - KAKAO  : getKakaoAccessToken()으로 최신 accessToken 획득
+ *              (반환 타입이 string 또는 object로 불일치할 수 있어 방어 처리 포함)
+ *   - NAVER  : 로그인 시 저장한 accessToken을 그대로 사용
+ *   - APPLE  : 로그인 시 저장한 authorizationCode를 사용
+ *              (Apple은 accessToken 재발급 API 미제공)
+ *
+ * @throws userId 또는 provider 정보가 없을 때, 또는 서버 탈퇴 API 실패 시 throw
  */
 export const withdraw = async (): Promise<void> => {
   try {
     const userInfo = await getUserInfo();
-
     const userId = userInfo?.userId;
     const provider = userInfo?.provider;
 
+    // 탈퇴에 필수적인 정보가 없으면 즉시 에러 (재로그인 유도)
     if (!userId) {
       throw new Error(
         '유저 정보를 찾을 수 없습니다. 다시 로그인 후 시도해주세요.',
@@ -238,15 +313,18 @@ export const withdraw = async (): Promise<void> => {
       throw new Error('로그인 제공자(provider) 정보를 찾을 수 없습니다.');
     }
 
+    // Apple은 accessToken 대신 authorizationCode를 사용하는 특수 케이스
     const isApple = provider === 'APPLE';
 
-    // unlink용 값: 저장값은 backup, 탈퇴 시점에 최신값을 우선 재획득
+    // unlink 토큰 초깃값: 로그인 시 저장해둔 값 (backup)
+    // 탈퇴 시점에 최신값 재획득을 시도하고, 실패 시 이 백업 값으로 폴백
     let providerAccessToken = userInfo?.providerAccessToken;
     const appleAuthorizationCode = userInfo?.appleAuthorizationCode;
 
     try {
       if (provider === 'GOOGLE') {
-        // 토큰 갱신 안정화
+        // signInSilently: 백그라운드 재인증으로 accessToken 갱신
+        // 실패해도 기존 저장값으로 시도하므로 내부 오류는 warn으로 처리
         try {
           await GoogleSignin.signInSilently();
         } catch (e) {
@@ -254,34 +332,39 @@ export const withdraw = async (): Promise<void> => {
         }
 
         const tokens = await GoogleSignin.getTokens();
+        // 재획득 성공 시 최신값 사용, 실패 시 기존 백업값 유지
         providerAccessToken = tokens?.accessToken ?? providerAccessToken;
       }
 
       if (provider === 'KAKAO') {
         const tokenInfo: any = await getKakaoAccessToken();
 
-        // 반환 타입 방어 (string / object 모두 대응)
+        // 카카오 SDK 버전에 따라 반환 타입이 string 또는 object로 다를 수 있음
+        // → 두 경우 모두 대응하는 방어 로직
         if (typeof tokenInfo === 'string') {
           providerAccessToken = tokenInfo || providerAccessToken;
         } else {
+          // object 타입: 가능한 키 이름을 순서대로 탐색
           providerAccessToken =
             tokenInfo?.accessToken ||
             tokenInfo?.token?.accessToken ||
             tokenInfo?.access_token ||
-            providerAccessToken;
+            providerAccessToken; // 모두 없으면 백업값 유지
         }
       }
 
-      // NAVER: 로그인 때 저장한 accessToken 사용
-      // APPLE: 로그인 때 저장한 authorizationCode 사용
+      // NAVER: SDK가 별도 토큰 재발급 API 미제공 → 로그인 시 저장한 값 사용
+      // APPLE: accessToken 재발급 불가 → 로그인 시 저장한 authorizationCode 사용
     } catch (e) {
+      // 토큰 재획득 자체가 실패해도 백업 저장값으로 서버 요청을 시도
       console.warn(
         '[withdraw] unlink 토큰 재획득 실패 - 저장된 값으로 시도합니다.',
         e,
       );
     }
 
-    // unlink 위해 필요한 값이 없으면 에러
+    // Apple이 아닌 경우 providerAccessToken은 필수값
+    // (없으면 서버의 소셜 unlink가 불가능하므로 에러 처리)
     if (!isApple && !providerAccessToken) {
       throw new Error(
         '소셜 연결 끊기에 필요한 providerAccessToken이 없습니다.',
@@ -296,31 +379,30 @@ export const withdraw = async (): Promise<void> => {
       hasAppleAuthorizationCode: !!appleAuthorizationCode,
     });
 
-    // 1) 서버 탈퇴 + 소셜 unlink
-    // undefined 값도 명시적으로 포함하기 위해 null로 변환
+    // ── STEP 1. 서버 탈퇴 + 소셜 unlink 요청 ──────────────────
+    // undefined는 JSON 직렬화 시 키 자체가 사라지므로 null로 명시 변환
     const requestBody: {
       unlinkSocial: boolean;
       providerAccessToken?: string | null;
       appleAuthorizationCode?: string | null;
     } = {
-      unlinkSocial: true,
+      unlinkSocial: true, // 서버가 소셜 unlink까지 함께 처리
     };
 
+    // 제공자별로 필요한 토큰 필드만 포함 (불필요한 필드는 null로 명시)
     if (!isApple) {
       requestBody.providerAccessToken = providerAccessToken || null;
+      requestBody.appleAuthorizationCode = null;
     } else {
       requestBody.providerAccessToken = null;
-    }
-
-    if (isApple) {
       requestBody.appleAuthorizationCode = appleAuthorizationCode || null;
-    } else {
-      requestBody.appleAuthorizationCode = null;
     }
 
     await withdrawUser(userId, requestBody);
 
-    // 2) 소셜 SDK 로그아웃 (실패해도 로컬 정리는 진행)
+    // ── STEP 2. 소셜 SDK 로그아웃 ──────────────────────────────
+    // 서버 탈퇴 이후 소셜 세션 종료 시도
+    // 실패해도 로컬 데이터 삭제는 반드시 진행 (별도 try-catch로 격리)
     try {
       await signOutSocial(provider);
     } catch {
@@ -329,7 +411,8 @@ export const withdraw = async (): Promise<void> => {
       );
     }
 
-    // 3) 로컬 저장값 삭제 (탈퇴 후 자동로그인 방지)
+    // ── STEP 3. 로컬 데이터 일괄 삭제 ─────────────────────────
+    // 탈퇴 후 앱 재진입 시 자동로그인이 되지 않도록 모든 인증 키 삭제
     await AsyncStorage.multiRemove([
       AUTH_TOKEN_KEY,
       REFRESH_TOKEN_KEY,
