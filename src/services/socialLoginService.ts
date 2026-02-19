@@ -195,6 +195,26 @@ export const signInWithGoogle = async (): Promise<SocialLoginResult> => {
     };
   } catch (error: any) {
     console.error('구글 로그인 에러:', error);
+
+    // 사용자 취소 감지
+    const isCancelled =
+      error?.code === '12501' || // SIGN_IN_CANCELLED
+      error?.message?.includes('SIGN_IN_CANCELLED') ||
+      error?.message?.includes('Sign in action cancelled');
+
+    if (isCancelled) {
+      return {
+        success: false,
+        provider: 'GOOGLE',
+        error: '로그인이 취소되었습니다.',
+      };
+    }
+
+    return {
+      success: false,
+      provider: 'GOOGLE',
+      error: error?.message || '구글 로그인에 실패했습니다.',
+    };
   }
 };
 
@@ -314,6 +334,26 @@ export const signInWithKakao = async (): Promise<SocialLoginResult> => {
     };
   } catch (error: any) {
     console.error('카카오 로그인 에러:', error);
+
+    // 사용자 취소 감지
+    const isCancelled =
+      error?.code === 'E_CANCELLED' ||
+      error?.message?.includes('cancelled') ||
+      error?.message?.includes('취소');
+
+    if (isCancelled) {
+      return {
+        success: false,
+        provider: 'KAKAO',
+        error: '로그인이 취소되었습니다.',
+      };
+    }
+
+    return {
+      success: false,
+      provider: 'KAKAO',
+      error: error?.message || '카카오 로그인에 실패했습니다.',
+    };
   }
 };
 
