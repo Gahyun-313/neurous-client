@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { initializeApp, getApps, getApp } from '@react-native-firebase/app';
 import RootNavigator from './src/navigation/RootNavigator';
 import { queryClient } from './src/config/queryClient';
 import { useOnboardingStore } from './src/store/onboardingStore';
@@ -23,27 +22,17 @@ const App = () => {
     }
   }, []);
 
+  // Firebase 초기화 확인 (개발 모드에서만)
   useEffect(() => {
-    try {
-      // 이미 초기화된 앱이 있는지 확인
-      const apps = getApps();
-      if (apps.length === 0) {
-        // 초기화되지 않았다면 GoogleService-Info.plist의 값으로 초기화
-        const firebaseConfig = {
-          apiKey: 'AIzaSyCvW-xajcxIsfsKoc96vnvOL1ihSn-3A0E',
-          projectId: 'neurous-d632a',
-          storageBucket: 'neurous-d632a.firebasestorage.app',
-          messagingSenderId: '424320333528',
-          appId: '1:424320333528:ios:afc28032174c603c48c9ad',
-          databaseURL: 'https://neurous-d632a-default-rtdb.firebaseio.com',
-        };
-        initializeApp(firebaseConfig);
-      } else {
-        // 이미 초기화되어 있다면 확인만
-        getApp();
+    if (__DEV__) {
+      try {
+        const firebase = require('@react-native-firebase/app').default;
+        const projectId = firebase.app().options.projectId;
+        console.log('🔥 Firebase Project:', projectId);
+        console.log('✅ Firebase initialized successfully');
+      } catch (error) {
+        console.error('❌ Firebase initialization check failed:', error);
       }
-    } catch (error) {
-      console.error('Firebase 초기화 오류:', error);
     }
   }, []);
 

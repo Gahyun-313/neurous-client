@@ -1,6 +1,7 @@
 import EventSource from 'react-native-sse';
-import client from './client';
 import { getAuthToken } from '../services/authService';
+import { IS_PRODUCTION } from '../config/adConfig';
+import { DEV_URL, PROD_URL } from '../config/api';
 
 let es: EventSource | null = null;
 
@@ -22,9 +23,7 @@ export async function subscribeNotificationsSSE(
   const token = await getAuthToken();
   if (!token) throw new Error('accessToken 없음');
 
-  const baseURL =
-    (client.defaults.baseURL as string | undefined) ??
-    'http://34.64.75.53:8080';
+  const baseURL = IS_PRODUCTION ? PROD_URL : DEV_URL;
 
   es = new EventSource(`${baseURL}/api/notifications/subscribe`, {
     headers: {
@@ -34,7 +33,7 @@ export async function subscribeNotificationsSSE(
     },
   });
 
-  // ✅ 커스텀 이벤트 타입 TS 에러 방지
+  // 커스텀 이벤트 타입 TS 에러 방지
   es.addEventListener('connect' as any, (e: any) => {
     handlers.onConnect?.(String(e?.data ?? ''));
   });

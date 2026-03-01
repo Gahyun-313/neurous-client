@@ -17,13 +17,20 @@
     android:usesCleartextTraffic="true"
     android:networkSecurityConfig="@xml/network_security_config"
     android:theme="@style/AppTheme">
+    
     <property
-    android:name="android.supports_16kb_page_size"
-    android:value="true" />
+      android:name="android.supports_16kb_page_size"
+      android:value="true" />
+    
     <meta-data
       android:name="com.google.android.gms.ads.APPLICATION_ID"
       android:value="ca-app-pub-5312046759396775~8649586487"
       tools:replace="android:value" />
+
+    <!-- Kakao SDK App Key -->
+    <meta-data
+      android:name="com.kakao.sdk.AppKey"
+      android:value="58005ef7dbe2dd56f4dd5ee0c582801e" />
 
     <activity
       android:name=".MainActivity"

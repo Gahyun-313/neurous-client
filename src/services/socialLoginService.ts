@@ -1,3 +1,22 @@
+/**
+ * 소셜 로그인 통합 서비스 (socialLoginService.ts)
+ *
+ * Google, Kakao, Naver, Apple 네 가지 소셜 로그인 제공자를 통합 관리한다.
+ *
+ * 처리 흐름 (모든 제공자 공통):
+ *   1. 소셜 SDK로 로그인 → 소셜 액세스 토큰 획득
+ *   2. Google/Apple은 Firebase Auth로 중간 인증 (idToken 발급)
+ *   3. 서버 API 호출 (/api/auth/login/provider) → 서버 JWT 토큰 발급
+ *   4. 서버 토큰 + 사용자 정보 + 소셜 토큰을 AsyncStorage에 저장
+ *   5. newUser 플래그 반환 (신규/기존 사용자 구분)
+ *
+ * 제공자별 특이사항:
+ *   - Google : Firebase Auth 필수, idToken을 서버로 전송
+ *   - Apple  : Firebase Auth 필수, authorizationCode를 별도 저장 (탈퇴 시 필요)
+ *   - Kakao  : 직접 SDK 연동, accessToken을 서버로 전송
+ *   - Naver  : 직접 SDK 연동, 타임아웃 처리로 취소 감지 (SDK 버그 우회)
+ */
+
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import {
   login as kakaoLogin,
@@ -17,9 +36,20 @@ import {
 import { getApp } from '@react-native-firebase/app';
 import { loginWithProvider } from '../api/authApi';
 import { saveAuthToken, saveRefreshToken, saveUserInfo } from './authService';
-// 소셜 로그인 타입
+
+// 소셜 로그인 제공자 타입
 export type SocialLoginProvider = 'GOOGLE' | 'KAKAO' | 'NAVER' | 'APPLE';
 
+/**
+ * 소셜 로그인 결과 인터페이스
+ *
+ * @property success     - 로그인 성공 여부
+ * @property provider    - 로그인 제공자
+ * @property accessToken - 소셜 액세스 토큰 (Google/Apple은 idToken)
+ * @property userInfo    - 소셜에서 가져온 사용자 정보
+ * @property newUser     - 신규 사용자 여부 (서버에서 반환)
+ * @property error       - 실패 시 에러 메시지
+ */
 export interface SocialLoginResult {
   success: boolean;
   provider: SocialLoginProvider;
@@ -34,7 +64,19 @@ export interface SocialLoginResult {
   error?: string;
 }
 
-// 구글 로그인 초기화
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// 구글 로그인
+// ────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * [구글 로그인 초기화]
+ * Google Sign-In SDK를 초기화한다.
+ *
+ * webClientId: Firebase 콘솔에서 발급받은 OAuth 클라이언트 ID
+ * offlineAccess: 리프레시 토큰 획득 활성화 (장기 세션 유지용)
+ *
+ * 앱 시작 시 한 번만 호출하면 되며, LoginScreen의 useEffect에서 실행된다.
+ */
 export const initializeGoogleSignIn = () => {
   try {
     GoogleSignin.configure({
@@ -46,9 +88,21 @@ export const initializeGoogleSignIn = () => {
   }
 };
 
-// 구글 로그인
+/**
+ * Google 소셜 로그인을 수행한다.
+ *
+ * 처리 흐름:
+ *   1. GoogleSignin.signIn() → 사용자 계정 선택 화면 표시
+ *   2. getTokens()로 idToken과 accessToken 획득
+ *   3. Firebase Auth로 idToken 검증 및 Firebase 사용자 생성
+ *   4. 서버 API 호출 (loginWithProvider) → 서버 JWT 발급
+ *   5. 서버 토큰, 사용자 정보, 소셜 accessToken을 AsyncStorage에 저장
+ *
+ * @returns SocialLoginResult (success, newUser, userInfo 등)
+ */
 export const signInWithGoogle = async (): Promise<SocialLoginResult> => {
   try {
+    // 1. Google 계정 선택 화면 표시
     await GoogleSignin.signIn();
     const tokens = await GoogleSignin.getTokens();
     const idToken = tokens.idToken;
@@ -58,6 +112,7 @@ export const signInWithGoogle = async (): Promise<SocialLoginResult> => {
       throw new Error('Google ID Token이 없습니다.');
     }
 
+    // 2. Firebase Auth로 idToken 검증
     const authInstance = getAuth(getApp());
     const googleCredential = GoogleAuthProvider.credential(idToken);
     const userCredential = await signInWithCredential(
@@ -66,7 +121,7 @@ export const signInWithGoogle = async (): Promise<SocialLoginResult> => {
     );
     const firebaseUser = userCredential.user;
 
-    // 서버 API 호출 (필수)
+    // 3. 서버 API 호출
     let newUser = true; // 기본값은 true (신규 사용자)
 
     try {
@@ -78,6 +133,7 @@ export const signInWithGoogle = async (): Promise<SocialLoginResult> => {
       // newUser 값 저장
       newUser = loginResponse.data?.newUser ?? true;
 
+      // 4. 서버 응답 데이터 저장
       if (loginResponse.data) {
         if (loginResponse.data.accessToken) {
           await saveAuthToken(loginResponse.data.accessToken);
@@ -116,7 +172,8 @@ export const signInWithGoogle = async (): Promise<SocialLoginResult> => {
       }
     } catch (apiError) {
       console.error('서버 로그인 API 호출 실패:', apiError);
-      // 서버 API 실패 시 에러 반환 (토큰 없이는 이후 API 호출 불가)
+      // 서버 API 실패 시 로그인 자체를 실패로 처리
+      // (토큰 없이는 이후 API 호출이 불가능하므로)
       return {
         success: false,
         provider: 'GOOGLE',
@@ -138,10 +195,38 @@ export const signInWithGoogle = async (): Promise<SocialLoginResult> => {
     };
   } catch (error: any) {
     console.error('구글 로그인 에러:', error);
+
+    // 사용자 취소 감지
+    const isCancelled =
+      error?.code === '12501' || // SIGN_IN_CANCELLED
+      error?.message?.includes('SIGN_IN_CANCELLED') ||
+      error?.message?.includes('Sign in action cancelled');
+
+    if (isCancelled) {
+      return {
+        success: false,
+        provider: 'GOOGLE',
+        error: '로그인이 취소되었습니다.',
+      };
+    }
+
+    return {
+      success: false,
+      provider: 'GOOGLE',
+      error: error?.message || '구글 로그인에 실패했습니다.',
+    };
   }
 };
 
-// 구글 로그아웃
+/**
+ * Google 소셜 로그아웃을 수행한다.
+ *
+ * GoogleSignin.signOut()과 Firebase Auth의 signOut()을 모두 호출하여
+ * 로컬 세션을 완전히 종료한다.
+ *
+ * 실패해도 에러를 throw하지 않고 로그만 남긴다.
+ * (로컬 로그아웃은 authService.logout()에서 별도 처리하므로)
+ */
 export const signOutGoogle = async (): Promise<void> => {
   try {
     // 로그아웃 전에 Google Sign-In SDK 초기화 확인
@@ -161,7 +246,10 @@ export const signOutGoogle = async (): Promise<void> => {
   }
 };
 
-// 카카오 로그인
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// 카카오 로그인 (firebase 없이 직접 연동)
+// ────────────────────────────────────────────────────────────────────────────────────────────
+
 export const signInWithKakao = async (): Promise<SocialLoginResult> => {
   try {
     const token = await kakaoLogin();
@@ -246,6 +334,26 @@ export const signInWithKakao = async (): Promise<SocialLoginResult> => {
     };
   } catch (error: any) {
     console.error('카카오 로그인 에러:', error);
+
+    // 사용자 취소 감지
+    const isCancelled =
+      error?.code === 'E_CANCELLED' ||
+      error?.message?.includes('cancelled') ||
+      error?.message?.includes('취소');
+
+    if (isCancelled) {
+      return {
+        success: false,
+        provider: 'KAKAO',
+        error: '로그인이 취소되었습니다.',
+      };
+    }
+
+    return {
+      success: false,
+      provider: 'KAKAO',
+      error: error?.message || '카카오 로그인에 실패했습니다.',
+    };
   }
 };
 
@@ -258,7 +366,16 @@ export const signOutKakao = async (): Promise<void> => {
   }
 };
 
-// 네이버 로그인 초기화
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// 네이버 로그인
+// ────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * [네이버 로그인 초기화]
+ * Naver 소셜 로그인 SDK를 초기화한다.
+ *
+ * 앱 시작 시 한 번만 호출하면 되며, LoginScreen의 useEffect에서 실행된다.
+ */
 export const initializeNaverLogin = () => {
   try {
     if (NaverLogin && typeof NaverLogin.initialize === 'function') {
@@ -274,8 +391,23 @@ export const initializeNaverLogin = () => {
   }
 };
 
+/**
+ * Naver 소셜 로그인을 수행한다.
+ *
+ * 중요: Naver SDK의 알려진 버그
+ *   - 사용자가 로그인 취소 시 Promise가 완료되지 않고 무한 대기 상태에 빠짐
+ *   - 해결: Promise.race()로 5초 타임아웃 설정, 타임아웃 발생 시 취소로 간주
+ *
+ * 처리 흐름:
+ *   1. NaverLogin.login() 호출 (disableNaverAppAuthIOS: true로 앱 전환 방지)
+ *   2. 타임아웃과 race → 5초 내 응답 없으면 취소로 처리
+ *   3. 성공 시 getProfile()로 사용자 정보 획득
+ *   4. 서버 API 호출 → 토큰 저장
+ *
+ * @returns SocialLoginResult
+ */
 export const signInWithNaver = async (): Promise<SocialLoginResult> => {
-  console.log('[NaverLogin] signInWithNaver 함수 진입'); // 👈 이 로그가 꼭 나와야 합니다!
+  console.log('[NaverLogin] signInWithNaver 함수 진입'); // 👈 해당 로그 꼭 떠야 함!
 
   try {
     initializeNaverLogin();
@@ -283,7 +415,7 @@ export const signInWithNaver = async (): Promise<SocialLoginResult> => {
     // 네이버 로그인 요청 (앱 이탈 방지 옵션 필수)
     console.log('[NaverLogin] login() 호출 시작');
 
-    // 취소 시 무한 대기 방지를 위한 타임아웃 추가 (10초)
+    // 취소 시 무한 대기 방지를 위한 타임아웃 추가 (5초)
     // 네이버 로그인 SDK의 알려진 버그: 취소 시 Promise가 완료되지 않음
     const loginPromise = (NaverLogin.login as any)({
       appName: NAVER_CONFIG.appName,
@@ -296,7 +428,7 @@ export const signInWithNaver = async (): Promise<SocialLoginResult> => {
     const timeoutPromise = new Promise<never>((_, reject) => {
       setTimeout(() => {
         reject(new Error('TIMEOUT'));
-      }, 5000); // 10초 타임아웃 (취소 시 빠른 응답)
+      }, 5000); // 5초 타임아웃 (취소 시 빠른 응답)
     });
 
     let result: any;
@@ -410,7 +542,18 @@ export const signOutNaver = async (): Promise<void> => {
   }
 };
 
-// 통합 소셜 로그인 함수
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// 통합 함수
+// ────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 제공자별 소셜 로그인 함수를 통합한 래퍼 함수
+ *
+ * 호출부에서는 provider만 전달하면 되도록 추상화했다.
+ *
+ * @param provider 로그인 제공자
+ * @returns SocialLoginResult
+ */
 export const signInWithSocial = async (
   provider: SocialLoginProvider,
 ): Promise<SocialLoginResult> => {
@@ -432,7 +575,14 @@ export const signInWithSocial = async (
   }
 };
 
-// 통합 로그아웃 함수
+/**
+ * [통합 로그아웃 함수]
+ *
+ * Apple은 별도 로그아웃 API가 없으므로 break만 처리한다.
+ *
+ * @param provider 로그인 제공자
+ */
+
 export const signOutSocial = async (
   provider: SocialLoginProvider,
 ): Promise<void> => {
@@ -450,6 +600,11 @@ export const signOutSocial = async (
       break;
   }
 };
+
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// Apple 로그인 ▶️ 사용하지 않음
+// ────────────────────────────────────────────────────────────────────────────────────────────
+
 // 애플 로그인
 export const signInWithApple = async (): Promise<SocialLoginResult> => {
   let appleAuthRequestResponse: any = null;
