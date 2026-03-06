@@ -1,6 +1,6 @@
 import EventSource from 'react-native-sse';
 import { getAuthToken } from '../services/authService';
-import { IS_PRODUCTION } from '../config/adConfig';
+import { IS_PRODUCTION } from '../config/env';
 import { DEV_URL, PROD_URL } from '../config/api';
 
 let es: EventSource | null = null;

@@ -17,7 +17,7 @@ import {
 } from '@react-native-firebase/analytics';
 import { getApp } from '@react-native-firebase/app';
 import { RouteNames } from '../../routes';
-import { IS_PRODUCTION } from '../config/adConfig';
+import { IS_PRODUCTION } from '../config/env';
 
 /**
  * 화면 이름 매핑 테이블
@@ -167,6 +167,7 @@ export const logEvent = async (
   try {
     // 프로덕션 모드가 아니면 로그를 Firebase에 전송하지 않음
     if (!IS_PRODUCTION) {
+      console.log('[Analytics - Dev] Event:', eventName, params);
       return;
     }
 
