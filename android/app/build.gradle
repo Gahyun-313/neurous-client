@@ -131,4 +131,9 @@ dependencies {
     } else {
         implementation jscFlavor
     }
+
+    // Firebase BOM: 모든 Firebase 라이브러리 버전을 일괄 관리
+    implementation platform('com.google.firebase:firebase-bom:33.7.0')
+    // FCM(Firebase Cloud Messaging): 디바이스 푸시 알림 수신
+    implementation 'com.google.firebase:firebase-messaging'
 }
