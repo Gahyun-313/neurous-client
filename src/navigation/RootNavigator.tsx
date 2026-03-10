@@ -130,9 +130,8 @@ const RootNavigatorContent: React.FC<{
       }
 
       try {
-        const pendingLevelUpData = await AsyncStorage.getItem(
-          '@pending_level_up',
-        );
+        const pendingLevelUpData =
+          await AsyncStorage.getItem('@pending_level_up');
 
         if (pendingLevelUpData) {
           try {

@@ -5,13 +5,15 @@
  *
  * 용도:
  *   - SSE(Server-Sent Events)로 수신한 실시간 알림을 store에 추가
+ *   - FCM(Firebase Cloud Messaging)으로 수신한 푸시 알림을 store에 추가
  *   - 캐릭터 화면의 알림 목록에서 읽음 처리
  *   - 서버에서 가져온 기존 알림 목록을 일괄 설정
  *
  * 데이터 흐름:
  *   1. useNotificationSSE 훅이 SSE 연결을 통해 새 알림 수신
- *   2. add() 함수로 알림을 목록 맨 위에 추가 (최신순)
- *   3. 사용자가 알림을 클릭하면 markRead()로 읽음 처리
+ *   2. usePushNotification 훅이 FCM을 통해 새 알림 수신 (백그라운드/종료)
+ *   3. add() 함수로 알림을 목록 맨 위에 추가 (최신순)
+ *   4. 사용자가 알림을 클릭하면 markRead()로 읽음 처리
  */
 
 import { create } from 'zustand';
@@ -76,6 +78,7 @@ export const useNotificationStore = create<State>(set => ({
    * 새 알림을 목록 맨 위에 추가한다.
    *
    * SSE로 실시간 알림이 수신될 때 useNotificationSSE 훅에서 호출된다.
+   * FCM으로 푸시 알림이 수신될 때 usePushNotification 훅에서도 호출된다.
    * 최신 알림이 항상 맨 위에 표시되도록 spread 연산자로 앞에 삽입한다.
    *
    * @param item 추가할 알림 객체
