@@ -9,6 +9,7 @@
  *   3. 포인트 및 경험치 획득
  *   4. 레벨업 정보 저장
  *   5. 난이도 피드백 모달 (하루 1회)
+ *   6. 난이도 제안 시스템 (실시간 분석)
  *
  * 화면 상태:
  *   - question: 문제 화면 (선택지 선택 가능)
@@ -21,7 +22,8 @@
  *   4. 포인트/경험치 획득 모달 표시
  *   5. 피드백 화면으로 전환 (정답/오답 표시)
  *   6. "완료" 버튼 클릭 → 난이도 피드백 모달 표시 (하루 1회)
- *   7. 원래 화면으로 이동 (mission 또는 search)
+ *   7. 피드백 저장 → 즉시 분석 → 조건 충족 시 난이도 제안 팝업
+ *   8. 원래 화면으로 이동 (mission 또는 search)
  */
 
 import React, { useState, useRef, useEffect } from 'react';
@@ -60,6 +62,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logEvent, logScreenView } from '../../services/analyticsService';
 import { FullScreenStackParamList } from '../../navigation/types';
 import { RouteNames } from '../../../routes';
+import { useDifficultyFeedbackCheck } from '../../hooks/useDifficultyFeedbackCheck';
+import { useDifficultySuggestion } from '../../hooks/useDifficultySuggestion';
+import { saveDifficultyFeedback } from '../../services/difficultyFeedbackService';
+import { useOnboardingStore } from '../../store/onboardingStore';
+import { LevelCategory } from '../../types/interests';
+import LevelSuggestionModal from '../../components/LevelSuggestionModal';
 
 // ──────────────────────────────────────────────
 // 타입 정의
@@ -130,6 +138,15 @@ const QuizScreen: React.FC = () => {
   const { addPoints } = usePointStore();
   const { addExperience } = useExperienceStore();
   const { submitDifficultyToServer } = useDifficultySubmit();
+
+  /** 난이도 제안 관련 훅 */
+  const { handleAcceptSuggestion, handleDeclineSuggestion } =
+    useDifficultySuggestion();
+
+  const { checkAfterFeedback } = useDifficultyFeedbackCheck();
+
+  /** 현재 난이도 가져오기 */
+  const currentDifficulty = useOnboardingStore(state => state.difficulty);
 
   /** 난이도 모달 타이머 (모달 닫기 지연용) */
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -351,6 +368,9 @@ const QuizScreen: React.FC = () => {
    *   3. 이미 제출했으면 모달 없이 바로 원래 화면으로 이동
    *   4. 제출하지 않았으면 난이도 선택 모달 표시
    *   5. 사용자가 난이도 선택 시:
+   *      - saveDifficultyFeedback() 피드백 저장
+   *      - checkAfterFeedback() 즉시 분석
+   *      - 조건 충족 시 난이도 제안 팝업
    *      - submitDifficultyToServer() API 호출
    *      - 0.2초 후 모달 닫기 및 원래 화면으로 이동
    *
@@ -394,6 +414,97 @@ const QuizScreen: React.FC = () => {
           initialDifficulty={selectedDifficulty}
           onSelect={async difficulty => {
             setSelectedDifficulty(difficulty);
+
+            // ──────────────────────────────────────────────
+            // Step 1: 피드백 저장
+            // ──────────────────────────────────────────────
+
+            let feedbackType: 'easy' | 'normal' | 'hard';
+
+            if (difficulty === 'easy') {
+              feedbackType = 'easy';
+            } else if (difficulty === 'normal') {
+              feedbackType = 'normal';
+            } else {
+              feedbackType = 'hard';
+            }
+
+            // AsyncStorage에 피드백 저장 (최근 20개 유지)
+            await saveDifficultyFeedback(
+              articleId,
+              currentDifficulty || LevelCategory.BEGINNER,
+              feedbackType,
+            );
+
+            // ──────────────────────────────────────────────
+            // Step 2: 즉시 분석 실행
+            // ──────────────────────────────────────────────
+            const analysis = await checkAfterFeedback();
+
+            // ──────────────────────────────────────────────
+            // Step 3: 제안 조건 충족 시 제안 팝업 표시
+            // ──────────────────────────────────────────────
+            if (analysis && analysis.shouldSuggest && analysis.suggestedLevel) {
+              logEvent('Show_Level_Suggestion_Modal');
+
+              // 기존 난이도 선택 모달 닫기
+              hideModal();
+
+              // 난이도 한글 변환 맵
+              const LEVEL_TEXT_MAP: Record<LevelCategory, string> = {
+                [LevelCategory.BEGINNER]: '초급',
+                [LevelCategory.INTERMEDIATE]: '중급',
+                [LevelCategory.ADVANCED]: '고급',
+              };
+
+              // 0.3초 후 제안 모달 표시 (모달 충돌 방지)
+              setTimeout(() => {
+                const currentLevelText =
+                  LEVEL_TEXT_MAP[currentDifficulty || LevelCategory.BEGINNER];
+
+                showModal({
+                  title:
+                    analysis.reason === 'easy'
+                      ? `${currentLevelText} 글이 너무 쉬우셨나요?`
+                      : `${currentLevelText} 글이 너무 어려우셨나요?`,
+                  titleStyle: {
+                    ...Heading_18EB_Round,
+                  },
+                  titleDescriptionGapSize: scaleWidth(16),
+                  closeOnBackdropPress: true,
+                  children: React.createElement(LevelSuggestionModal, {
+                    suggestedLevel: analysis.suggestedLevel,
+                    reason: analysis.reason as 'easy' | 'hard',
+                    stats: analysis.stats,
+
+                    onAccept: async () => {
+                      logEvent('Accept_Level_Suggestion');
+                      await handleAcceptSuggestion(analysis.suggestedLevel!);
+                      hideModal();
+                      navigation.dispatch(
+                        createQuizCompleteNavigation(returnTo),
+                      );
+                    },
+
+                    onDecline: async () => {
+                      logEvent('Decline_Level_Suggestion');
+                      await handleDeclineSuggestion();
+                      hideModal();
+                      navigation.dispatch(
+                        createQuizCompleteNavigation(returnTo),
+                      );
+                    },
+                  }),
+                  primaryButton: undefined,
+                });
+              }, 300);
+
+              return;
+            }
+
+            // ──────────────────────────────────────────────
+            // Step 4: 즉시 분석 실행
+            // ──────────────────────────────────────────────
 
             // 서버로 난이도 전송
             await submitDifficultyToServer(articleId, difficulty);
