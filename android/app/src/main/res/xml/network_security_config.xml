@@ -4,9 +4,6 @@
         <domain includeSubdomains="true">localhost</domain>
         <domain includeSubdomains="true">10.0.2.2</domain>
         <domain includeSubdomains="true">127.0.0.1</domain>
-        <!-- 개발 서버 IP 주소 -->
-        <domain includeSubdomains="true">34.64.75.53</domain>
-        <domain includeSubdomains="true">175.45.193.98</domain>
     </domain-config>
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
