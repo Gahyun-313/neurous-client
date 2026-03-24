@@ -31,9 +31,7 @@
 			<string>Editor</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>com.googleusercontent.apps.424320333528-3em9k816cropmqufki5vq4cb4nrrcrof</string>
-				<string>com.googleusercontent.apps.424320333528-de3lsl1sqg407ck8nrk8jmodmhertul2</string>
-				<string>com.googleusercontent.apps.424320333528-kds0hat5nvuq8nq74hikfju5720bk91n</string>
+				<string>com.googleusercontent.apps.267850674842-esm110kbq1th9fkaf6rc1md6a6v14cvm</string>
 			</array>
 		</dict>
 		<dict>
@@ -81,21 +79,6 @@
 		<!-- 프로덕션 환경에서는 특정 도메인만 예외 처리 -->
 		<key>NSExceptionDomains</key>
 		<dict>
-			<!-- 개발 서버 IP 주소들 (명시적으로 추가, NSAllowsArbitraryLoads가 true이면 이미 허용됨) -->
-			<key>34.64.75.53</key>
-			<dict>
-				<key>NSExceptionAllowsInsecureHTTPLoads</key>
-				<true/>
-				<key>NSIncludesSubdomains</key>
-				<true/>
-			</dict>
-			<key>175.45.193.98</key>
-			<dict>
-				<key>NSExceptionAllowsInsecureHTTPLoads</key>
-				<true/>
-				<key>NSIncludesSubdomains</key>
-				<true/>
-			</dict>
 			<key>storage.googleapis.com</key>
 			<dict>
 				<key>NSExceptionAllowsInsecureHTTPLoads</key>
