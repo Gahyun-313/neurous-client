@@ -59,7 +59,7 @@ const LEVEL_TEXT_MAP: Record<LevelCategory, string> = {
 const LevelSuggestionModal: React.FC<LevelSuggestionModalProps> = ({
   suggestedLevel,
   reason,
-  stats,
+
   onAccept,
   onDecline,
 }) => {
@@ -72,15 +72,16 @@ const LevelSuggestionModal: React.FC<LevelSuggestionModalProps> = ({
     if (reason === 'easy') {
       return {
         levelBadgeText: suggestedLevelText,
-        description: `최근 20개의 글 중 '쉬움'을 ${stats.easyCount}회 선택하셨어요.\n${suggestedLevelText} 난이도로 변경할까요?`,
+        description:
+          '최근 난이도 기록을 보니,\n지금보다 조금 더 어려운 글도 읽어볼 수 있을 것 같아요.',
       };
     }
 
     return {
       levelBadgeText: suggestedLevelText,
-      description: `최근 20개의 글 중 '어려움'을 ${stats.hardCount}회 선택하셨어요.\n${suggestedLevelText} 난이도로 변경할까요?`,
+      description: `최근 난이도 기록을 보니,\n지금보다 쉬운 난이도로 차근차근\n소화해보는 게 좋을 것 같아요.`,
     };
-  }, [suggestedLevel, reason, stats]);
+  }, [suggestedLevel, reason]);
 
   return (
     <View style={styles.container}>
