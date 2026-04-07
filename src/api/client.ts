@@ -19,6 +19,7 @@ import {
 import { refreshToken } from './authApi';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useOnboardingStore } from '../store/onboardingStore';
+import { IS_PRODUCTION } from '../config/env';
 import { DEV_URL, PROD_URL } from '../config/api';
 
 // ─────────────────────────────────────────────────────────────
@@ -26,14 +27,14 @@ import { DEV_URL, PROD_URL } from '../config/api';
 // ─────────────────────────────────────────────────────────────
 
 const client = axios.create({
-  baseURL: __DEV__ ? PROD_URL : DEV_URL, // 환경에 따라 baseURL 분기
+  baseURL: IS_PRODUCTION ? PROD_URL : DEV_URL, // 환경에 따라 baseURL 분기
   timeout: 10000, // 10초 타임아웃 (네트워크가 느릴 때 무한 대기 방지)
   headers: {
     'Content-Type': 'application/json',
   },
 });
 console.log('baseURL:', client.defaults.baseURL);
-console.log('IS_PRODUCTION:', __DEV__);
+console.log('IS_PRODUCTION:', IS_PRODUCTION);
 
 // ─────────────────────────────────────────────────────────────
 // 전역 상태 플래그
