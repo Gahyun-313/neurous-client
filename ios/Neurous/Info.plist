@@ -26,50 +26,39 @@
 	<string>????</string>
 	<key>CFBundleURLTypes</key>
 	<array>
-		<!-- Google 로그인 URL Scheme -->
 		<dict>
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>com.googleusercontent.apps.YOUR_REVERSED_CLIENT_ID</string>
+				<string>com.googleusercontent.apps.267850674842-esm110kbq1th9fkaf6rc1md6a6v14cvm</string>
 			</array>
 		</dict>
-
-		<!-- Kakao 로그인 URL Scheme -->
 		<dict>
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>kakaoYOUR_KAKAO_NATIVE_APP_KEY</string>
+				<string>kakao58005ef7dbe2dd56f4dd5ee0c582801e</string>
 			</array>
 		</dict>
-
-		<!-- Naver 로그인 URL Scheme -->
 		<dict>
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>naverloginYOUR_NAVER_CONSUMER_KEY</string>
+				<string>neurousnaver</string>
 			</array>
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-
-	<!-- 실제 AdMob 앱 ID로 교체 -->
 	<key>GADApplicationIdentifier</key>
-	<string>ca-app-pub-XXXXXXXXXXXXXXXX~XXXXXXXXXX</string>
-
+	<string>ca-app-pub-5312046759396775~9471713566</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
-
-	<!-- 실제 Kakao 앱 키로 교체 -->
 	<key>KAKAO_APP_KEY</key>
-	<string>YOUR_KAKAO_NATIVE_APP_KEY</string>
-
+	<string>58005ef7dbe2dd56f4dd5ee0c582801e</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>kakaokompassauth</string>
@@ -80,22 +69,14 @@
 	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-
-	<!-- xcconfig에서 서버 주소를 주입 -->
-	<key>API_BASE_URL</key>
-	<string>$(API_BASE_URL)</string>
-
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<!-- 개발 환경에서는 HTTP 요청 허용 -->
+		<!-- 개발 환경: HTTP 연결 허용 (프로덕션에서는 false로 변경 필요) -->
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
-
-		<!-- 로컬 네트워크 접근 허용 -->
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
-
-		<!-- 개발/필수 도메인 예외 설정 -->
+		<!-- 프로덕션 환경에서는 특정 도메인만 예외 처리 -->
 		<key>NSExceptionDomains</key>
 		<dict>
 			<key>storage.googleapis.com</key>
@@ -105,18 +86,8 @@
 				<key>NSIncludesSubdomains</key>
 				<true/>
 			</dict>
-
-			<!-- 개발 서버 IP로 교체 -->
-			<key>YOUR_DEV_SERVER_IP</key>
-			<dict>
-				<key>NSExceptionAllowsInsecureHTTPLoads</key>
-				<true/>
-				<key>NSIncludesSubdomains</key>
-				<true/>
-			</dict>
 		</dict>
 	</dict>
-
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string></string>
 	<key>NSUserNotificationsUsageDescription</key>
