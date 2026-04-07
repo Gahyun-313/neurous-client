@@ -30,7 +30,7 @@ android/**/build/
 android/.cxx/
 android/**/*.hprof
 
-# Keystores / signing / secrets
+# Keystores / signing / secrets (NEVER COMMIT)
 *.keystore
 *.jks
 *.p12
@@ -39,7 +39,7 @@ android/**/*.hprof
 
 android/app/debug.keystore
 
-# Android signing props
+# Android signing props (NEVER COMMIT)
 android/gradle.properties
 
 # =========================
@@ -62,6 +62,7 @@ ios/xcuserdata/
 *.xcuserstate
 **/.xcode.env.local
 
+# (옵션) 보통 커밋 안 하는 편
 ios/.xcode.env
 
 # =========================
@@ -71,7 +72,7 @@ android/app/google-services.json
 ios/GoogleService-Info.plist
 ios/**/GoogleService-Info.plist
 
-# 템플릿(example)은 커밋 허용
+# (추천) 템플릿은 커밋 허용
 !android/app/google-services.json.example
 !ios/GoogleService-Info.plist.example
 !ios/**/GoogleService-Info.plist.example
@@ -79,12 +80,10 @@ ios/**/GoogleService-Info.plist
 # =========================
 # App local config
 # =========================
-# 실제 서버 url 노출 금지
+# do not commit real server url
 src/config/api.ts
-ios/Neurous/Info.plist
-ios/Neurous/Config.xcconfig
 
-# env files
+# env files (if you use later)
 .env
 *.env
 
