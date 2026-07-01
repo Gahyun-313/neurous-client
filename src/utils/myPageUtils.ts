@@ -147,7 +147,8 @@ const getDayOfWeek = (kstDateStr: string): string => {
 
 /**
  * MyPageContent[]를 ReadArticlesByDate[] 형태로 변환
- * readAt은 UTC ISO 문자열이므로 KST(Asia/Seoul) 기준으로 날짜 그룹화
+ * readAt은 오프셋 없는 KST(Asia/Seoul) 벽시계 시각 문자열이므로
+ * dayjs.tz()로 명시 파싱하여 로컬 타임존 의존성을 제거함
  */
 export const convertMyPageContentsToReadArticles = (
   contents: MyPageContent[],
@@ -159,7 +160,9 @@ export const convertMyPageContentsToReadArticles = (
   // KST 기준으로 날짜별 그룹화
   const groupedByDate = contents.reduce(
     (acc, content) => {
-      const readDate = dayjs(content.readAt).tz(KST).format('YYYY-MM-DD');
+      // readAt은 서버에서 오프셋 없이 내려오는 KST 벽시계 시각(LocalDateTime)이므로
+      // dayjs.tz()로 명시적으로 KST임을 지정해 파싱 (로컬 타임존 의존 제거)
+      const readDate = dayjs.tz(content.readAt, KST).format('YYYY-MM-DD');
       if (!acc[readDate]) {
         acc[readDate] = [];
       }
