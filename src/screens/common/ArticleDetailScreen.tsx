@@ -135,8 +135,8 @@ const ArticleDetailScreen = () => {
 
         const response = await fetchContentDetail(
           userInfo.userId,
-          isFromHome,
           articleId,
+          isFromHome,
         );
         if (response.data) {
           setContentDetail(response.data);

@@ -398,15 +398,15 @@ export const updateMissionProgress = async (
  * 미션 달성 카운트 처리에 사용됨.
  *
  * @param userId     현재 로그인된 유저 ID
- * @param isFromHome 홈(미션) 화면에서 진입했는지 여부 (기본값 false)
  * @param contentId  조회할 콘텐츠 ID
+ * @param isFromHome 홈(미션) 화면에서 진입했는지 여부 (기본값 false)
  * @returns          글 상세 데이터 (이미지 URL 보정 포함)
  * @throws           네트워크 오류 또는 서버 에러 시 에러
  */
 export const fetchContentDetail = async (
   userId: number,
-  isFromHome: boolean,
   contentId: number,
+  isFromHome: boolean,
 ): Promise<ContentDetailResponse> => {
   try {
     console.log(
