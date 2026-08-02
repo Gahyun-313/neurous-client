@@ -69,12 +69,15 @@ import { useOnboardingStore } from '../../store/onboardingStore';
 import {
   DAILY_ATTENDANCE_EXPERIENCE,
   DAILY_ATTENDANCE_POINT,
+  WEEKLY_ATTENDANCE_EXPERIENCE,
+  WEEKLY_ATTENDANCE_POINT,
 } from '../../config/rewards';
 import { useExperienceStore } from '../../store/experienceStore';
 import IconButton from '../../components/IconButton';
 import { AlarmIcon, Modal_IMG } from '../../icons';
 import { logEvent, logScreenView } from '../../services/analyticsService';
 import { trackEvent } from '../../services/mixpanelService';
+import { getLocalDateKey } from '../../utils/dateUtils';
 
 // ──────────────────────────────────────────────
 // 상수 정의
@@ -520,7 +523,11 @@ const MissionScreen = () => {
 
     const checkDailyEntry = async () => {
       try {
-        const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+        // 로컬(기기) 기준 "오늘" 날짜와 요일을 하나의 Date로 통일해서 계산
+        // (UTC 기준 toISOString과 로컬 기준 getDay()를 섞어 쓰면
+        //  한국시간 자정~오전 9시 사이에 하루가 어긋나는 문제가 있었음)
+        const now = new Date();
+        const today = getLocalDateKey(now); // YYYY-MM-DD (로컬 기준)
         const lastEntryDate = await AsyncStorage.getItem(
           DAILY_MISSION_ENTRY_KEY,
         );
@@ -530,9 +537,20 @@ const MissionScreen = () => {
           await AsyncStorage.setItem(DAILY_MISSION_ENTRY_KEY, today);
           hasCheckedDailyEntryRef.current = true;
 
-          // 포인트 및 경험치 지급
-          addPoints(DAILY_ATTENDANCE_POINT);
-          addExperience(DAILY_ATTENDANCE_EXPERIENCE);
+          // 일요일(마지막 요일) 데일리 출석 = 위클리 출석도 함께 완료
+          // 위클리는 항상 이 시점에 데일리와 합산 지급되므로 별도 dedup이 필요 없다
+          // (DAILY_MISSION_ENTRY_KEY의 하루 1회 체크가 위클리 중복 지급도 함께 막아준다)
+          const isWeeklyAttendanceComplete = now.getDay() === 0; // 0 = 일요일 (today와 동일한 now 기준)
+
+          // 포인트 및 경험치 지급 (일요일이면 데일리 + 위클리 합산)
+          addPoints(
+            DAILY_ATTENDANCE_POINT +
+              (isWeeklyAttendanceComplete ? WEEKLY_ATTENDANCE_POINT : 0),
+          );
+          addExperience(
+            DAILY_ATTENDANCE_EXPERIENCE +
+              (isWeeklyAttendanceComplete ? WEEKLY_ATTENDANCE_EXPERIENCE : 0),
+          );
 
           // Mixpanel: 보상 팝업 노출 (데일리 출석)
           trackEvent('reward_popup_view', {
@@ -542,7 +560,18 @@ const MissionScreen = () => {
             point_amount: DAILY_ATTENDANCE_POINT,
           });
 
-          // 출석 체크 모달 표시
+          // Mixpanel: 위클리 출석도 같은 시점에 완료되었으면 별도 이벤트로 함께 기록
+          // (팝업은 하나로 합쳐서 보여주지만, 분석 이벤트는 각 reward_source별로 남긴다)
+          if (isWeeklyAttendanceComplete) {
+            trackEvent('reward_popup_view', {
+              reward_type: 'xp_point',
+              reward_source: 'weekly_attendance',
+              xp_amount: WEEKLY_ATTENDANCE_EXPERIENCE,
+              point_amount: WEEKLY_ATTENDANCE_POINT,
+            });
+          }
+
+          // 출석 체크 모달 표시 (일요일이면 데일리+위클리 합산 값으로 표시)
           showModal({
             title: '포인트 & 경험치 획득!',
             image: <Modal_IMG />,
@@ -553,6 +582,7 @@ const MissionScreen = () => {
             children: React.createElement(ExperienceModalContent, {
               point: true,
               daily: true, // 일일 출석 표시
+              weekly: isWeeklyAttendanceComplete, // 일요일이면 위클리 합산 표시로 전환
             }),
             primaryButton: { title: '확인', onPress: () => {} },
           });
