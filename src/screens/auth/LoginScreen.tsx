@@ -9,7 +9,6 @@ import {
   StyleSheet,
   Alert,
   Platform,
-  Dimensions,
   AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -19,7 +18,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteNames } from '../../../routes';
 import { OnboardingStackParamList } from '../../navigation/types';
 import { COLORS, scaleWidth } from '../../styles/global';
-import { Body_16SB, Heading_16B } from '../../styles/typography';
+import { Body_16R, Heading_16B } from '../../styles/typography';
 import {
   signInWithSocial,
   initializeGoogleSignIn,
@@ -37,7 +36,7 @@ import { useTrackingPermission } from '../../hooks/useTrackingPermission';
 
 import Spacer from '../../components/Spacer';
 import { SocialLoginButton } from '../../components';
-import { LoginBackground } from '../../icons/commonIcons/simpleImages';
+import { NeurousLogo } from '../../icons/commonIcons/simpleImages';
 import { logEvent, logScreenView } from '../../services/analyticsService';
 import { updateNotificationStatus } from '../../api/notificationApi';
 import { getUserInfo } from '../../services/authService';
@@ -242,7 +241,7 @@ const LoginScreen = () => {
           showModal({
             title: '알림을 받으시겠어요?',
             description:
-              '알림을 켜두면, 하루 두 번 문해력 루틴을 \n잊지 않고 챙길 수 있어요!',
+              '하루 두 번 알림으로\n읽기를 잊지 않고 이어갈 수 있어요!',
             descriptionColor: COLORS.gray600,
             primaryButton: {
               title: '알림 받을래요',
@@ -392,14 +391,15 @@ const LoginScreen = () => {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.backgroundContainer}>
-        <LoginBackground style={styles.backgroundImage} />
-      </View>
-
+      {/* 배경은 이미지 대신 container의 단색(COLORS.puple.main)을 그대로 사용 */}
       <View style={styles.content}>
-        <Text style={styles.logoText}>
-          일상의 틈, 언제든 시작하는 문해력 미션
-        </Text>
+        {/* 상단 여백: Figma 시안 기준 로고 위치(852pt 기준 상단 236pt, 상태바 높이 제외) */}
+        <Spacer num={177} />
+
+        <NeurousLogo />
+        <Spacer num={16} />
+        {/* 로고 워드마크(이미지)와 분리된 라이브 텍스트 - 문구 수정 시 이 값만 바꾸면 즉시 반영됨 */}
+        <Text style={styles.logoText}>일상의 틈, 부담 없이 이어가는 읽기</Text>
 
         <View style={styles.buttonContainer}>
           <SocialLoginButton
@@ -452,27 +452,16 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.puple.main,
   },
-  backgroundContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    zIndex: 0,
-  },
-  backgroundImage: {
-    width: Dimensions.get('window').width,
-    height: Dimensions.get('window').height,
-  },
   content: {
     flex: 1,
     alignItems: 'center',
     paddingHorizontal: scaleWidth(20),
-    zIndex: 1,
   },
   logoText: {
-    ...Body_16SB,
-    color: COLORS.puple.main,
+    ...Body_16R,
+    color: COLORS.white,
+    textAlign: 'center',
+    letterSpacing: scaleWidth(-0.48),
   },
   buttonContainer: {
     width: '100%',
