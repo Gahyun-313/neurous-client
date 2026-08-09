@@ -58,6 +58,14 @@
 - **수정 파일**: `src/services/authService.ts` (`logout()`, `withdraw()`)
 - **관련 문서**: `docs/AUTH_FLOW.md`의 "로그아웃 순서 보장" 절
 
+### 로그아웃 후 다른 계정 로그인 시 이전 계정 캐릭터 정보가 잠깐 보임
+
+- **증상**: 로그아웃하고 다른 계정으로 로그인하면, 캐릭터 탭에 이전 계정의 레벨/경험치/출석 정보가 잠깐 보였다가 잠시 뒤 새 계정 정보로 바뀜
+- **원인**: `queryClient`(React Query 캐시)는 앱 전체에서 하나만 쓰는 싱글턴인데, 로그아웃 시 이를 비우는 코드가 없었음. 캐릭터 쿼리 키(`characterKeys.me()` 등)는 유저 ID로 구분되지 않는 고정 키라, 이전 계정 응답이 캐시에 그대로 남아있는 상태에서 새 계정으로 로그인하면 화면이 일단 그 낡은 캐시를 먼저 그려주고, 백그라운드 refetch가 끝난 뒤에야 새 계정 데이터로 바뀜
+- **해결**: `authService.ts`의 `logout()`, `withdraw()`에서 로컬 저장값 삭제 직후 `queryClient.clear()` 호출해 React Query 캐시 전체를 비우도록 추가
+- **수정 파일**: `src/services/authService.ts` (`logout()`, `withdraw()`)
+- **참고**: 캐시를 비우고 나면 다음 로그인 시 캐릭터 쿼리가 처음부터 다시 시작되므로, 신규 유저와 동일하게 `refetchQueries`가 아닌 `prefetchQuery` 기반 프리페치가 필요함 ("캐릭터 탭 첫 진입 시 출석/진행률 미갱신" 항목 참고)
+
 ### 이용약관이 신규/기존 유저 구분 없이 로그인 때마다 노출
 
 - **증상**: 이미 가입한 기존 유저도 소셜 로그인 버튼을 누를 때마다 이용약관 동의 화면을 다시 봐야 했음
@@ -121,6 +129,8 @@
 - **원인**: `RootNavigator`가 로컬 경험치(`experience`) 증가를 감지해 캐릭터 쿼리를 무효화(`invalidateQueries`)할 때 대상이 `characterKeys.data()`뿐이었음. 정작 출석·진행률이 담긴 `characterKeys.me()` 캐시는 앱 전체 어디서도 무효화되지 않아, `CharacterScreen`의 `useFocusEffect` 강제 refetch 한 번에만 전적으로 의존하는 구조 → 마운트 타이밍과 겹치면 첫 포커스에서 최신 데이터를 받아오지 못함
 - **해결**: `RootNavigator`의 무효화 대상을 `characterKeys.data()` → `characterKeys.all`로 확장(`data`/`me`/`reward` 전체 무효화). 추가로 `useCharacterMe`/`useCharacterData`에 `refetchOnMount: 'always'`를 붙여(`useMissions`와 동일한 패턴) 화면 마운트 시 캐시 신선도와 무관하게 항상 서버 재조회하도록 이중 안전장치를 둠
 - **수정 파일**: `src/navigation/RootNavigator.tsx`, `src/hooks/useCharacter.ts`
+- **후속 조치 (신규 가입 등 서버 반영 자체가 늦는 케이스 대비)**: 위 조치는 "캐릭터 탭에 들어갈 때마다 다시 요청"하는 것까진 보장하지만, 그 요청 시점에 서버가 아직 보상을 반영 못 했으면 여전히 낡은 값을 받아옴. 이를 완화하기 위해 포인트/경험치 지급 직후(일일 출석 체크·글 읽기 보상·퀴즈 보상) 캐릭터 탭 진입 전에 미리 백그라운드로 조회해두는 `prefetchCharacterAfterReward()`를 추가. 캐시 존재 여부와 무관하게 항상 요청이 나가야 해서 `refetchQueries`가 아닌 `prefetchQuery`를 사용했고, 서버 반영 지연 대비 즉시 1회 + 1.5초 뒤 1회 더 요청함
+- **후속 조치 수정 파일**: `src/hooks/useCharacter.ts`(`prefetchCharacterAfterReward` 추가), `src/screens/main/MissionScreen.tsx`, `src/screens/common/ArticleDetailScreen.tsx`, `src/screens/common/QuizScreen.tsx`
 
 ### 로그인 화면 문구를 코드에서 수정해도 반영되지 않음
 
