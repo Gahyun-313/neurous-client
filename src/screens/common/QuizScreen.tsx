@@ -1,3 +1,31 @@
+/**
+ * 퀴즈 화면 (QuizScreen.tsx)
+ *
+ * 글을 읽은 후 퀴즈를 풀고, 정답 여부에 따라 포인트와 경험치를 획득하는 화면이다.
+ *
+ * 주요 기능:
+ *   1. 퀴즈 문제 및 선택지 표시
+ *   2. 정답 제출 및 피드백 표시
+ *   3. 포인트 및 경험치 획득
+ *   4. 레벨업 정보 저장
+ *   5. 난이도 피드백 모달 (하루 1회)
+ *   6. 난이도 제안 시스템 (실시간 분석)
+ *
+ * 화면 상태:
+ *   - question: 문제 화면 (선택지 선택 가능)
+ *   - feedback: 정답 체크 화면 (정답/오답 표시)
+ *
+ * 처리 흐름:
+ *   1. 퀴즈 화면 진입과 동시에 난이도 평가 팝업 표시 (하루 1회)
+ *   2. 난이도 선택 → 피드백 저장 → 즉시 분석 → 조건 충족 시 난이도 제안 팝업
+ *   3. 퀴즈 데이터 로드 (fetchQuiz API)
+ *   4. 사용자가 선택지 선택
+ *   5. "다음" 버튼 클릭 → 완독 체크 API 호출 → submitQuiz API 호출
+ *   6. 포인트/경험치 지급 (로컬 상태) → 정답 체크 화면으로 전환
+ *   7. "완료" 버튼 클릭 → 리워드 팝업 표시
+ *   8. 리워드 팝업 "확인" 클릭 → 팝업 제거 후 원래 화면으로 이동 (mission 또는 search)
+ */
+
 import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -13,12 +41,17 @@ import Button from '../../components/Button';
 import QuizOptionCard from '../../components/QuizOptionCard';
 import QuizQuestion from '../../components/QuizQuestion';
 import Spacer from '../../components/Spacer';
-import { Modal_IMG, CheckIcon } from '../../icons';
-import { useShowModal, useHideModal } from '../../store/modalStore';
+import { Modal_IMG, CheckIcon, LevelChangeCheckIcon } from '../../icons';
+import {
+  useShowModal,
+  useShowToastModal,
+  useHideModal,
+} from '../../store/modalStore';
 import DifficultySelectionModal, {
   Difficulty,
 } from '../../components/DifficultySelectionModal';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { ExperienceModalContent } from '../../components/ArticlePointModalContent';
 import { usePointStore } from '../../store/pointStore';
 import { useExperienceStore } from '../../store/experienceStore';
@@ -31,44 +64,144 @@ import { fetchQuiz, QuizResponse, submitQuiz } from '../../api/missionApi';
 import { getUserInfo } from '../../services/authService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logEvent, logScreenView } from '../../services/analyticsService';
+import { FullScreenStackParamList } from '../../navigation/types';
+import { RouteNames } from '../../../routes';
+import { useDifficultyFeedbackCheck } from '../../hooks/useDifficultyFeedbackCheck';
+import { useDifficultySuggestion } from '../../hooks/useDifficultySuggestion';
+import { saveDifficultyFeedback } from '../../services/difficultyFeedbackService';
+import { useOnboardingStore } from '../../store/onboardingStore';
+import { prefetchCharacterAfterReward } from '../../hooks/useCharacter';
+import { prefetchPointHistoryAfterReward } from '../../hooks/usePointHistory';
+import { LevelCategory, LevelCategoryNames } from '../../types/interests';
+import LevelSuggestionModal from '../../components/LevelSuggestionModal';
+import { trackEvent } from '../../services/mixpanelService';
 
+// ──────────────────────────────────────────────
+// 타입 정의
+// ──────────────────────────────────────────────
+
+/** 퀴즈 화면의 두 가지 상태 */
 type QuizState = 'question' | 'feedback';
 
+/** 퀴즈 선택지 인터페이스 */
 interface QuizOption {
   id: number;
   text: string;
 }
 
+type NavigationProp = NativeStackNavigationProp<FullScreenStackParamList>;
+type QuizRouteProp = RouteProp<
+  FullScreenStackParamList,
+  typeof RouteNames.QUIZ
+>;
+
 const QuizScreen: React.FC = () => {
-  const route = useRoute();
-  // @ts-ignore
-  const articleId = route.params?.articleId || 0;
-  // @ts-ignore
-  const returnTo = route.params?.returnTo || 'mission';
+  const route = useRoute<QuizRouteProp>();
+  const navigation = useNavigation<NavigationProp>();
+
+  // ──────────────────────────────────────────────
+  // Route Params (타입 안전)
+  // ──────────────────────────────────────────────
+
+  /** 퀴즈를 풀 글 ID */
+  const articleId = route.params.articleId;
+
+  /** 퀴즈 완료 후 돌아갈 화면 ('mission' | 'search') */
+  const returnTo = route.params.returnTo || 'mission';
+
+  // ──────────────────────────────────────────────
+  // State
+  // ──────────────────────────────────────────────
+
+  /** API로 조회한 퀴즈 데이터 */
   const [quizData, setQuizData] = useState<QuizResponse | null>(null);
+
+  /** 사용자가 선택한 선택지 ID */
   const [selectedOptionId, setSelectedOptionId] = useState<number | null>(null);
+
+  /** 현재 화면 상태 (문제 화면 or 정답 체크 화면) */
   const [quizState, setQuizState] = useState<QuizState>('question');
+
+  /** 사용자가 선택한 난이도 (난이도 피드백 모달용) */
   const [selectedDifficulty, setSelectedDifficulty] =
     useState<Difficulty | null>(null);
+
+  /**
+   * 퀴즈 제출 결과 (API 응답)
+   * - correctChoiceNo: 정답 선택지 번호
+   * - isAnswerCorrect: 사용자가 맞췄는지 여부
+   */
   const [quizResult, setQuizResult] = useState<{
     correctChoiceNo: number;
     isAnswerCorrect: boolean;
   } | null>(null);
+
+  /** 퀴즈 제출로 획득한 보상 (리워드 팝업 Mixpanel 이벤트용) */
+  const [earnedReward, setEarnedReward] = useState<{
+    point: number;
+    exp: number;
+  } | null>(null);
+
+  // ──────────────────────────────────────────────
+  // Hooks
+  // ──────────────────────────────────────────────
+
   const showModal = useShowModal();
+  const showToastModal = useShowToastModal();
   const hideModal = useHideModal();
-  const navigation = useNavigation();
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { addPoints } = usePointStore();
+  const { addExperience } = useExperienceStore();
   const { submitDifficultyToServer } = useDifficultySubmit();
 
-  // quizState가 'feedback'으로 변경될 때만 로그 기록
-  // 'question' 상태는 RootNavigator에서 이미 '퀴즈'로 자동 로그가 기록됨
+  /** 난이도 제안 관련 훅 */
+  const { handleAcceptSuggestion, handleDeclineSuggestion } =
+    useDifficultySuggestion();
+
+  const { checkAfterFeedback } = useDifficultyFeedbackCheck();
+
+  /** 현재 난이도 가져오기 */
+  const currentDifficulty = useOnboardingStore(state => state.difficulty);
+
+  /** 난이도 모달 타이머 (모달 닫기 지연용) */
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** 퀴즈 제출 중인지 여부 (버튼 연타로 인한 중복 제출 방지) */
+  const isSubmittingQuizRef = useRef(false);
+
+  // ──────────────────────────────────────────────
+  // Effect 1: 화면 상태에 따른 analytics 로그
+  // ──────────────────────────────────────────────
+
+  /**
+   * 정답 체크 화면으로 전환될 때만 로그 기록
+   *
+   * 'question' 상태는 RootNavigator에서 이미 '퀴즈'로 자동 로그가 기록되므로
+   * 여기서는 'feedback' 상태로 변경될 때만 별도 로그를 남긴다.
+   */
   useEffect(() => {
     if (quizState === 'feedback') {
       logScreenView('Quiz_Answer', undefined, true);
     }
   }, [quizState]);
 
-  // 퀴즈 데이터 로드
+  // ──────────────────────────────────────────────
+  // Effect 2: 퀴즈 데이터 로드
+  // ──────────────────────────────────────────────
+
+  /**
+   * 화면 진입 시 퀴즈 데이터를 API로 조회한다.
+   *
+   * 처리 흐름:
+   *   1. articleId 유효성 검사
+   *   2. getUserInfo()로 현재 사용자 정보 조회
+   *   3. fetchQuiz() API 호출
+   *   4. 응답 데이터를 quizData 상태에 저장
+   *
+   * 에러 처리:
+   *   - articleId 없음: 조기 리턴
+   *   - 사용자 정보 없음: 조기 리턴
+   *   - API 실패: 콘솔 에러 로그만 남김 (UI에는 영향 없음)
+   */
   useEffect(() => {
     const loadQuiz = async () => {
       if (!articleId) {
@@ -87,6 +220,7 @@ const QuizScreen: React.FC = () => {
           articleId,
         });
         console.log('[퀴즈 조회 API] 응답:', JSON.stringify(response, null, 2));
+
         if (response.data) {
           console.log('[퀴즈 조회 API] 데이터:', {
             quizId: response.data.quizId,
@@ -95,6 +229,16 @@ const QuizScreen: React.FC = () => {
             choices: response.data.choices,
           });
           setQuizData(response.data);
+
+          // Mixpanel: 퀴즈 화면 진입
+          const userDifficulty = useOnboardingStore.getState().difficulty;
+          trackEvent('quiz_enter', {
+            article_id: articleId,
+            category: response.data.quizCategory,
+            difficulty: userDifficulty
+              ? LevelCategoryNames[userDifficulty]
+              : null,
+          });
         }
       } catch (err: any) {
         console.error('[퀴즈] 로드 실패:', err);
@@ -104,22 +248,259 @@ const QuizScreen: React.FC = () => {
     loadQuiz();
   }, [articleId]);
 
+  // ──────────────────────────────────────────────
+  // Effect 3: articleId 변경 시 제출 관련 상태 초기화
+  // ──────────────────────────────────────────────
+
+  /**
+   * articleId가 변경되면 퀴즈 제출 관련 상태를 초기화한다.
+   *
+   * 이유:
+   *   - 같은 QuizScreen에서 다른 글의 퀴즈를 풀 수 있음
+   *   - 글마다 제출 처리는 독립적으로 실행되어야 함
+   *
+   * 리셋 항목:
+   *   - 퀴즈 제출 진행 여부
+   */
+  useEffect(() => {
+    isSubmittingQuizRef.current = false;
+  }, [articleId]);
+
+  // ──────────────────────────────────────────────
+  // Effect 4: 화면 진입 시 난이도 피드백 모달 표시
+  // ──────────────────────────────────────────────
+
+  /**
+   * 퀴즈 화면 진입과 동시에 난이도 평가 팝업을 표시한다.
+   *
+   * 처리 흐름:
+   *   1. checkCanSubmitDifficulty()로 오늘 이미 난이도를 제출했는지 확인
+   *   2. 이미 제출했으면 모달 표시 없이 종료
+   *   3. 제출하지 않았으면 난이도 선택 모달 표시
+   *   4. 사용자가 난이도 선택 시:
+   *      - saveDifficultyFeedback() 피드백 저장
+   *      - checkAfterFeedback() 즉시 분석
+   *      - 조건 충족 시 난이도 제안 팝업 (LevelSuggestionModal)
+   *      - submitDifficultyToServer() API 호출
+   *      - 0.2초 후 모달 닫기
+   *
+   * 변경 사유:
+   *   - 기존: 퀴즈 완료 후 "완료" 버튼 클릭 시 표시
+   *   - 변경: 퀴즈 화면 진입과 동시에 표시 (기획 변경)
+   */
+  useEffect(() => {
+    const showDifficultyModalOnEnter = async () => {
+      // 하루 한 번만 표시
+      const canSubmit = await checkCanSubmitDifficulty();
+      if (!canSubmit) {
+        return;
+      }
+
+      logEvent('Complete_Quiz_Answer');
+
+      showModal({
+        title: '이번 글의 난이도는\n 어떠셨나요?',
+        titleStyle: {
+          ...Heading_18EB_Round,
+        },
+        description: '글의 난이도에 반영해드려요!',
+        descriptionColor: COLORS.gray600,
+        titleDescriptionGapSize: scaleWidth(8),
+        closeOnBackdropPress: false,
+        children: (
+          <DifficultySelectionModal
+            initialDifficulty={selectedDifficulty}
+            onSelect={async difficulty => {
+              setSelectedDifficulty(difficulty);
+
+              // Step 1: 피드백 저장
+              let feedbackType: 'easy' | 'normal' | 'hard';
+              if (difficulty === 'easy') {
+                feedbackType = 'easy';
+              } else if (difficulty === 'normal') {
+                feedbackType = 'normal';
+              } else {
+                feedbackType = 'hard';
+              }
+
+              // AsyncStorage에 피드백 저장 (최근 20개 유지)
+              await saveDifficultyFeedback(
+                articleId,
+                currentDifficulty || LevelCategory.BEGINNER,
+                feedbackType,
+              );
+
+              // Step 2: 즉시 분석 실행
+              const analysis = await checkAfterFeedback();
+
+              // Step 3: 제안 조건 충족 시 제안 팝업 표시
+              if (
+                analysis &&
+                analysis.shouldSuggest &&
+                analysis.suggestedLevel
+              ) {
+                logEvent('Show_Level_Suggestion_Modal');
+                const suggestedLevel = analysis.suggestedLevel;
+
+                // 기존 난이도 선택 모달 닫기
+                hideModal();
+
+                // 0.3초 후 제안 모달 표시 (모달 충돌 방지)
+                setTimeout(() => {
+                  const suggestionTitle =
+                    analysis.reason === 'easy'
+                      ? '조금 더 어려운 글도 읽어볼까요?'
+                      : '조금 더 편하게 읽어볼까요?';
+
+                  // Mixpanel: 난이도 변경 제안 팝업 노출
+                  const difficultyBefore =
+                    useOnboardingStore.getState().difficulty;
+                  trackEvent('difficulty_recommendation_view', {
+                    current_difficulty: difficultyBefore
+                      ? LevelCategoryNames[difficultyBefore]
+                      : null,
+                    recommended_difficulty: LevelCategoryNames[suggestedLevel],
+                  });
+
+                  showModal({
+                    title: suggestionTitle,
+                    titleStyle: {
+                      ...Heading_18EB_Round,
+                    },
+                    titleDescriptionGapSize: scaleWidth(16),
+                    closeOnBackdropPress: true,
+                    children: React.createElement(LevelSuggestionModal, {
+                      suggestedLevel,
+                      reason: analysis.reason as 'easy' | 'hard',
+                      stats: analysis.stats,
+
+                      onAccept: async () => {
+                        logEvent('Accept_Level_Suggestion');
+
+                        // Mixpanel: 난이도 변경 제안 수락
+                        trackEvent('difficulty_recommendation_accepted', {
+                          difficulty_before: difficultyBefore
+                            ? LevelCategoryNames[difficultyBefore]
+                            : null,
+                          difficulty_after: LevelCategoryNames[suggestedLevel],
+                        });
+
+                        await handleAcceptSuggestion(suggestedLevel);
+                        hideModal();
+                        showToastModal({
+                          message: '난이도 설정이 완료되었어요',
+                          icon: <LevelChangeCheckIcon />,
+                          position: 'bottom',
+                          marginHorizontal: scaleWidth(20),
+                          paddingHorizontal: scaleWidth(20),
+                          paddingVertical: scaleWidth(14),
+                          borderRadius: BORDER_RADIUS[99],
+                          duration: 2000,
+                        });
+                      },
+
+                      onDecline: async () => {
+                        logEvent('Decline_Level_Suggestion');
+
+                        // Mixpanel: 난이도 변경 제안 거절
+                        trackEvent('difficulty_recommendation_dismissed', {
+                          current_difficulty: difficultyBefore
+                            ? LevelCategoryNames[difficultyBefore]
+                            : null,
+                          recommended_difficulty:
+                            LevelCategoryNames[suggestedLevel],
+                        });
+
+                        await handleDeclineSuggestion();
+                        hideModal();
+                      },
+                    }),
+                    primaryButton: undefined,
+                  });
+                }, 300);
+
+                return;
+              }
+
+              // Step 4: 서버로 난이도 전송 후 모달 닫기
+              await submitDifficultyToServer(articleId, difficulty);
+
+              // 0.2초 지연: 사용자가 선택한 것을 시각적으로 확인할 수 있도록
+              setTimeout(() => {
+                hideModal();
+              }, 200);
+            }}
+          />
+        ),
+      });
+    };
+
+    showDifficultyModalOnEnter();
+    // 진입 시 1회만 실행 (articleId는 Effect 3에서 변경 시 초기화되므로 의존성에서 제외)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ──────────────────────────────────────────────
+  // 핸들러: 선택지 선택
+  // ──────────────────────────────────────────────
+
+  /**
+   * 사용자가 선택지를 클릭했을 때 호출된다.
+   *
+   * 문제 화면(question)에서만 선택 가능하며,
+   * 정답 체크 화면(feedback)에서는 선택 불가능하다.
+   *
+   * @param optionId 선택한 선택지 ID
+   */
   const handleOptionSelect = (optionId: number) => {
     if (quizState === 'question') {
       setSelectedOptionId(optionId);
     }
   };
-  const { addPoints } = usePointStore();
-  const { addExperience } = useExperienceStore();
+
+  // ──────────────────────────────────────────────
+  // 핸들러: "다음" 버튼 클릭 (퀴즈 제출)
+  // ──────────────────────────────────────────────
+
+  /**
+   * "다음" 버튼 클릭 시 퀴즈를 제출하고 결과를 처리한다.
+   *
+   * 처리 흐름:
+   *   1. 선택지 유효성 검사
+   *   2. 버튼 연타로 인한 중복 제출 방지
+   *   3. 현재 사용자 정보 조회
+   *   4. 퀴즈 제출 시점에 완독 체크 API 호출
+   *   5. submitQuiz API 호출
+   *   6. 포인트 및 경험치 추가 (로컬 상태)
+   *   7. 레벨업 정보 AsyncStorage에 저장 (MissionScreen에서 감지)
+   *   8. 리워드 팝업 표시
+   *   9. 리워드 팝업 "확인" 클릭 → 정답 체크 화면으로 전환
+   *
+   * 변경된 보상 처리 방식:
+   *   - ArticleDetailScreen에서는 퀴즈 화면 이동만 처리
+   *   - QuizScreen에서 퀴즈 제출 API가 성공했을 때 포인트/경험치를 지급
+   *
+   * 에러 처리:
+   *   - 완독 체크 API 호출에 실패해도 퀴즈 제출은 계속 진행
+   *   - 퀴즈 제출 API가 실패하면 보상 지급 및 정답 체크 화면 전환을 하지 않음
+   */
   const handleNext = async () => {
+    console.log('[QuizScreen] 퀴즈 제출 버튼 클릭');
     if (!selectedOptionId || !quiz || !quizData) {
       return;
     }
+
+    if (isSubmittingQuizRef.current) {
+      return;
+    }
+
+    isSubmittingQuizRef.current = true;
 
     try {
       const userInfo = await getUserInfo();
       if (!userInfo || !userInfo.userId) {
         console.error('[퀴즈] 사용자 정보 없음');
+        isSubmittingQuizRef.current = false;
         return;
       }
 
@@ -129,10 +510,14 @@ const QuizScreen: React.FC = () => {
       );
       if (!selectedChoice) {
         console.error('[퀴즈] 선택한 선택지를 찾을 수 없습니다.');
+        isSubmittingQuizRef.current = false;
         return;
       }
 
+      // ──────────────────────────────────────────────
       // 퀴즈 제출 API 호출
+      // ──────────────────────────────────────────────
+
       const submitRequest = {
         quizId: quiz.id,
         selectedNo: selectedChoice.choiceNo,
@@ -154,7 +539,7 @@ const QuizScreen: React.FC = () => {
         userLevelInformation,
       });
 
-      // 퀴즈 결과 저장 (피드백 화면에서 정답 판단용)
+      // 퀴즈 결과 저장 (정답 체크 화면에서 정답 판단용)
       if (quizResultResponse) {
         setQuizResult({
           correctChoiceNo: quizResultResponse.correctChoiceNo,
@@ -162,11 +547,37 @@ const QuizScreen: React.FC = () => {
         });
       }
 
-      // 포인트 및 경험치 추가
-      addPoints(rewardResponse.earnedPoint);
-      addExperience(rewardResponse.earnedExp);
+      // ──────────────────────────────────────────────
+      // Step 3: 퀴즈 제출 성공 시 포인트 및 경험치 지급
+      // ──────────────────────────────────────────────
+
+      /**
+       * submitQuiz API 응답으로 받은 보상을 로컬 상태에 반영한다.
+       *
+       * 주의:
+       *   - 경험치는 ArticleDetailScreen에서 지급하지 않는다.
+       *   - 퀴즈 제출 API가 성공했을 때만 지급한다.
+       */
+      if (rewardResponse) {
+        addPoints(rewardResponse.earnedPoint);
+        addExperience(rewardResponse.earnedExp);
+
+        // 캐릭터 탭 진입 전 미리 최신 정보를 백그라운드로 받아둠
+        // (퀴즈 보상은 submitQuiz API 응답 기반이라 서버에는 이미 반영된 상태지만,
+        //  캐릭터 탭 진입 시 체감 로딩을 줄이기 위해 동일하게 프리페치)
+        prefetchCharacterAfterReward();
+        // "받은 내역 확인하기" 화면도 같은 시점에 함께 프리페치
+        prefetchPointHistoryAfterReward();
+
+        // 리워드 팝업 Mixpanel 이벤트용으로 보상 내역 저장
+        setEarnedReward({
+          point: rewardResponse.earnedPoint,
+          exp: rewardResponse.earnedExp,
+        });
+      }
 
       // 레벨업 정보가 있으면 AsyncStorage에 저장
+      // MissionScreen에서 이 정보를 감지하여 레벨업 모달 표시
       if (userLevelInformation) {
         await AsyncStorage.setItem(
           '@pending_level_up',
@@ -174,77 +585,99 @@ const QuizScreen: React.FC = () => {
         );
       }
 
-      // 경험치 획득 모달 표시
-      showModal({
-        title: '포인트 & 경험치 획득!',
-        image: <Modal_IMG />,
-        titleStyle: {
-          ...Heading_20EB_Round,
-        },
-        titleDescriptionGapSize: scaleWidth(20),
-        children: React.createElement(ExperienceModalContent, {
-          point: true,
-          correct: quizResultResponse.isAnswerCorrect,
-        }),
-        primaryButton: {
-          title: '확인',
-          onPress: () => {},
-        },
-      });
+      // ──────────────────────────────────────────────
+      // Step 4: 정답 체크 화면으로 전환
+      // ──────────────────────────────────────────────
 
+      // Mixpanel: 퀴즈 완료 (정답 여부와 관계없이 결과 화면 이동 시 발생)
+      {
+        const userDifficulty = useOnboardingStore.getState().difficulty;
+        trackEvent('quiz_complete', {
+          article_id: articleId,
+          category: quizData.quizCategory,
+          difficulty: userDifficulty
+            ? LevelCategoryNames[userDifficulty]
+            : null,
+          is_correct: quizResultResponse?.isAnswerCorrect ?? false,
+        });
+      }
+
+      // 정답 체크 화면으로 전환 (리워드 팝업은 "완료" 버튼 클릭 시 표시)
       setQuizState('feedback');
     } catch (error: any) {
       console.error('[퀴즈] 제출 실패:', error);
+      isSubmittingQuizRef.current = false;
     }
   };
 
-  const handleComplete = async () => {
-    // 기존 타이머가 있으면 클리어
+  // ──────────────────────────────────────────────
+  // 핸들러: "완료" 버튼 클릭
+  // ──────────────────────────────────────────────
+
+  /**
+   * "완료" 버튼 클릭 시 리워드 팝업을 표시한다.
+   *
+   * 처리 흐름:
+   *   1. 리워드 팝업 표시
+   *   2. 팝업 "확인" 클릭 → 팝업 제거 후 원래 화면으로 이동
+   */
+  const handleComplete = () => {
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
     }
 
-    // 하루에 한 번만 난이도 모달 표시 체크
-    const canSubmit = await checkCanSubmitDifficulty();
+    // Mixpanel: 보상 팝업 노출 (퀴즈 정답/오답 보상)
+    trackEvent('reward_popup_view', {
+      article_id: articleId,
+      category: quizData?.quizCategory,
+      reward_type:
+        earnedReward && earnedReward.exp > 0 && earnedReward.point > 0
+          ? 'xp_point'
+          : earnedReward && earnedReward.exp > 0
+            ? 'xp'
+            : 'point',
+      reward_source: quizResult?.isAnswerCorrect
+        ? 'quiz_correct'
+        : 'quiz_wrong',
+      xp_amount: earnedReward?.exp ?? 0,
+      point_amount: earnedReward?.point ?? 0,
+    });
 
-    // 오늘 이미 전송했다면 모달 표시하지 않고 바로 이동
-    if (!canSubmit) {
-      navigation.dispatch(createQuizCompleteNavigation(returnTo));
-      return;
-    }
-    logEvent('Complete_Quiz_Answer');
-
-    // 난이도 선택 모달 표시
     showModal({
-      title: '이번 글의 난이도는\n 어떠셨나요?',
+      title: '포인트 & 경험치 획득!',
+      image: <Modal_IMG />,
       titleStyle: {
-        ...Heading_18EB_Round,
+        ...Heading_20EB_Round,
       },
-      description: '글의 난이도에 반영해드려요!',
-      descriptionColor: COLORS.gray600,
-      titleDescriptionGapSize: scaleWidth(8),
-      closeOnBackdropPress: false,
-      children: (
-        <DifficultySelectionModal
-          initialDifficulty={selectedDifficulty}
-          onSelect={async difficulty => {
-            setSelectedDifficulty(difficulty);
-
-            // 서버로 난이도 전송
-            await submitDifficultyToServer(articleId, difficulty);
-
-            // 난이도 선택 시 모달 닫고 원래 화면으로 이동
-            setTimeout(() => {
-              hideModal();
-              navigation.dispatch(createQuizCompleteNavigation(returnTo));
-            }, 200);
-          }}
-        />
-      ),
+      titleDescriptionGapSize: scaleWidth(20),
+      children: React.createElement(ExperienceModalContent, {
+        point: true,
+        correct: quizResult?.isAnswerCorrect ?? false,
+      }),
+      primaryButton: {
+        title: '확인',
+        onPress: () => {
+          // 모달 닫기 (hideModal은 모달 컴포넌트에서 처리)
+          // 팝업 확인 후 이전 화면으로 이동
+          navigation.dispatch(createQuizCompleteNavigation(returnTo));
+        },
+      },
     });
   };
 
-  // 마지막 마침표 제거 유틸리티 함수
+  // ──────────────────────────────────────────────
+  // 유틸리티 함수
+  // ──────────────────────────────────────────────
+
+  /**
+   * 문자열 끝의 마침표를 제거한다.
+   *
+   * API에서 받은 퀴즈 문제와 선택지에 마침표가 포함되어 있을 수 있는데,
+   * UI에서는 마침표 없이 표시하기 위해 제거한다.
+   *
+   * @param text 원본 문자열
+   * @returns 마침표가 제거된 문자열
+   */
   const removeTrailingPeriod = (text: string | undefined): string => {
     if (!text) {
       return '';
@@ -252,47 +685,109 @@ const QuizScreen: React.FC = () => {
     return text.endsWith('.') ? text.slice(0, -1) : text;
   };
 
-  // API 응답을 기존 Quiz 구조로 변환
+  // ──────────────────────────────────────────────
+  // API 응답을 UI용 Quiz 구조로 변환
+  // ──────────────────────────────────────────────
+
+  /**
+   * API 응답(QuizResponse)을 UI 렌더링용 Quiz 객체로 변환한다.
+   *
+   * 변환 내용:
+   *   - quizId → id
+   *   - quizContent → question (마침표 제거)
+   *   - choices → options (마침표 제거)
+   *   - correct 필드를 찾아 correctAnswerId 설정
+   *
+   * 이렇게 변환하는 이유:
+   *   - 기존 코드에서 사용하던 Quiz 인터페이스와 호환성 유지
+   *   - 컴포넌트 렌더링 로직을 단순화
+   */
   const quiz = quizData
     ? {
         id: quizData.quizId,
-        question: removeTrailingPeriod(quizData.quizContent), // question -> quizContent 수정, 마지막 마침표 제거
+        question: removeTrailingPeriod(quizData.quizContent),
         options: quizData.choices.map(choice => ({
           id: choice.quizChoiceId,
-          text: removeTrailingPeriod(choice.choiceText), // 마지막 마침표 제거
+          text: removeTrailingPeriod(choice.choiceText),
         })),
         correctAnswerId:
           quizData.choices.find(choice => choice.correct)?.quizChoiceId || 0,
       }
     : null;
 
+  // ──────────────────────────────────────────────
+  // 정답 판단 함수
+  // ──────────────────────────────────────────────
+
+  /**
+   * 특정 선택지가 정답인지 판단한다.
+   *
+   * 판단 로직:
+   *   - 문제 화면(question): 초기 데이터의 correct 필드 사용
+   *   - 정답 체크 화면(feedback): API 응답의 correctChoiceNo 사용
+   *
+   * 정답 체크 화면에서 API 응답을 사용하는 이유:
+   *   - 서버에서 실제로 정답으로 판정한 선택지를 표시하기 위함
+   *   - 초기 데이터와 서버 판정이 다를 수 있음 (드물지만 발생 가능)
+   *
+   * @param optionId 확인할 선택지 ID
+   * @returns 정답 여부
+   */
   const isCorrect = (optionId: number) => {
     if (!quiz || !quizData) {
       return false;
     }
 
-    // 피드백 화면에서는 API 응답의 correctChoiceNo 사용
+    // 정답 체크 화면: API 응답의 correctChoiceNo 사용
     if (quizState === 'feedback' && quizResult) {
-      // choiceNo로 정답 찾기
       const option = quizData.choices.find(
         choice => choice.quizChoiceId === optionId,
       );
       return option?.choiceNo === quizResult.correctChoiceNo;
     }
 
-    // 문제 화면에서는 초기 데이터의 correct 필드 사용
+    // 문제 화면: 초기 데이터의 correct 필드 사용
     return optionId === quiz.correctAnswerId;
   };
 
+  // ──────────────────────────────────────────────
+  // 선택지 렌더링 함수
+  // ──────────────────────────────────────────────
+
+  /**
+   * 퀴즈 선택지를 렌더링한다.
+   *
+   * 화면 상태에 따라 다른 스타일 적용:
+   *   - question (문제 화면):
+   *     - 선택 여부에 따라 스타일 변경
+   *     - 체크 아이콘 표시 (선택됨 / 선택 안 됨)
+   *     - 클릭 가능
+   *
+   *   - feedback (정답 체크 화면):
+   *     - 정답/오답에 따라 스타일 변경
+   *     - QuizOptionCard 컴포넌트 사용 (정답 표시 아이콘 포함)
+   *     - 클릭 불가능
+   *
+   * analytics 이벤트:
+   *   - 첫 번째 선택지 클릭: 'Choice1_Quiz'
+   *   - 두 번째 선택지 클릭: 'Choice2_Quiz'
+   *   - 세 번째 선택지 클릭: 'Choice3_Quiz'
+   *
+   * @param option 선택지 객체
+   * @param index 선택지 순서 (0부터 시작)
+   * @returns 렌더링된 선택지 컴포넌트
+   */
   const renderOption = (option: QuizOption, index: number) => {
     if (quizState === 'question') {
       // 문제 화면: 선택 여부에 따라 스타일 변경
       const isSelected = selectedOptionId === option.id;
+
       return (
         <Pressable
           key={option.id}
           style={[styles.optionCard, isSelected && styles.optionCardSelected]}
           onPress={() => {
+            // analytics 이벤트 로그
             if (index === 0) {
               logEvent('Choice1_Quiz');
             } else if (index === 1) {
@@ -321,7 +816,7 @@ const QuizScreen: React.FC = () => {
         </Pressable>
       );
     } else {
-      // 피드백 화면: 정답/오답에 따라 스타일 변경
+      // 정답 체크 화면: 정답/오답에 따라 스타일 변경
       const correct = isCorrect(option.id);
       return (
         <QuizOptionCard key={option.id} option={option} isCorrect={correct} />
@@ -329,6 +824,11 @@ const QuizScreen: React.FC = () => {
     }
   };
 
+  // ──────────────────────────────────────────────
+  // UI 렌더링
+  // ──────────────────────────────────────────────
+
+  // 퀴즈 데이터가 없으면 아무것도 렌더링하지 않음
   if (!quiz) {
     return null;
   }
@@ -356,6 +856,7 @@ const QuizScreen: React.FC = () => {
           return (
             <View key={option.id}>
               {renderOption(option, index)}
+              {/* 마지막 선택지가 아니면 간격 추가 */}
               {index !== quiz.options.length - 1 && <Spacer num={16} />}
             </View>
           );
@@ -370,6 +871,7 @@ const QuizScreen: React.FC = () => {
         onPress={quizState === 'question' ? handleNext : handleComplete}
         variant="primary"
         style={styles.actionButton}
+        // 문제 화면에서 선택지를 선택하지 않으면 버튼 비활성화
         disabled={quizState === 'question' && !selectedOptionId}
       />
     </SafeAreaView>

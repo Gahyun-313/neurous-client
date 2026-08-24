@@ -1,17 +1,29 @@
 /**
- * 온보딩 관련 서비스
+ * 온보딩 상태 관리 서비스 (onboardingService.ts)
+ *
+ * AsyncStorage를 통해 온보딩 진행 상태, 관심분야, 난이도 선택 정보를 저장/조회한다.
+ *
+ * AsyncStorage 키 구조:
+ *   @onboarding_completed : 'true' | null (온보딩 완료 여부)
+ *   @onboarding_step      : 'login' | 'interests' | 'difficulty' | 'completed'
+ *   @onboarding_interests : JSON 문자열 (Record<string, number>)
+ *   @onboarding_difficulty: JSON 문자열 (LevelCategory)
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LevelCategory } from '../types/interests';
 import { getAuthToken } from './authService';
 
+// ──────────────────────────────────────────────
+// AsyncStorage 키 상수
+// ──────────────────────────────────────────────
 const ONBOARDING_COMPLETED_KEY = '@onboarding_completed';
 const ONBOARDING_STEP_KEY = '@onboarding_step';
 const INTERESTS_KEY = '@onboarding_interests';
 const DIFFICULTY_KEY = '@onboarding_difficulty';
 
 export type OnboardingStep = 'login' | 'interests' | 'difficulty' | 'completed';
+
 export type InterestsData = Record<string, number>;
 
 export interface OnboardingData {
@@ -21,9 +33,10 @@ export interface OnboardingData {
   difficulty: LevelCategory | null;
 }
 
-/**
- * 온보딩 상태 조회
- */
+// ──────────────────────────────────────────────
+// 온보딩 상태 조회
+// ──────────────────────────────────────────────
+
 export const getOnboardingStatus = async (): Promise<OnboardingData> => {
   try {
     const completed = await AsyncStorage.getItem(ONBOARDING_COMPLETED_KEY);
@@ -32,6 +45,7 @@ export const getOnboardingStatus = async (): Promise<OnboardingData> => {
     )) as OnboardingStep | null;
     const interestsStr = await AsyncStorage.getItem(INTERESTS_KEY);
     const difficultyStr = await AsyncStorage.getItem(DIFFICULTY_KEY);
+
     const difficulty: LevelCategory | null = difficultyStr
       ? (JSON.parse(difficultyStr) as LevelCategory)
       : null;
@@ -40,7 +54,7 @@ export const getOnboardingStatus = async (): Promise<OnboardingData> => {
       ? JSON.parse(interestsStr)
       : null;
 
-    // 온보딩 완료 여부 확인
+    // ── CASE 1. 온보딩 완료 상태
     if (completed === 'true') {
       return {
         isCompleted: true,
@@ -50,12 +64,11 @@ export const getOnboardingStatus = async (): Promise<OnboardingData> => {
       };
     }
 
-    // 토큰이 있지만 온보딩이 완료되지 않은 경우
-    // (관심분야나 난이도가 없는 경우)
+    // ── CASE 2. 데이터 불일치 감지 (토큰은 있는데 온보딩 정보 없음)
     const token = await getAuthToken();
     if (token && (!interests || !difficulty)) {
-      // 온보딩 미완료 상태로 리셋
       await AsyncStorage.removeItem(ONBOARDING_COMPLETED_KEY);
+
       if (!step || step === 'completed') {
         await AsyncStorage.setItem(ONBOARDING_STEP_KEY, 'interests');
       }
@@ -68,7 +81,7 @@ export const getOnboardingStatus = async (): Promise<OnboardingData> => {
       };
     }
 
-    // 온보딩 진행 중인 경우
+    // ── CASE 3. 온보딩 진행 중
     if (step) {
       return {
         isCompleted: false,
@@ -78,7 +91,7 @@ export const getOnboardingStatus = async (): Promise<OnboardingData> => {
       };
     }
 
-    // 온보딩 시작 전
+    // ── CASE 4. 온보딩 시작 전 (초기 상태)
     return {
       isCompleted: false,
       step: 'login',
@@ -96,22 +109,27 @@ export const getOnboardingStatus = async (): Promise<OnboardingData> => {
   }
 };
 
+// ──────────────────────────────────────────────
+// 온보딩 상태 저장
+// ──────────────────────────────────────────────
+
 /**
  * 온보딩 완료 처리
+ *
+ * multiSet으로 2개 키를 한 번에 저장한다. (기존: setItem x2 순차)
  */
 export const completeOnboarding = async (): Promise<void> => {
   try {
-    await AsyncStorage.setItem(ONBOARDING_COMPLETED_KEY, 'true');
-    await AsyncStorage.setItem(ONBOARDING_STEP_KEY, 'completed');
+    await AsyncStorage.multiSet([
+      [ONBOARDING_COMPLETED_KEY, 'true'],
+      [ONBOARDING_STEP_KEY, 'completed'],
+    ]);
   } catch (error) {
     console.error('온보딩 완료 저장 실패:', error);
     throw error;
   }
 };
 
-/**
- * 온보딩 단계 저장
- */
 export const saveOnboardingStep = async (
   step: OnboardingStep,
 ): Promise<void> => {
@@ -123,9 +141,6 @@ export const saveOnboardingStep = async (
   }
 };
 
-/**
- * 관심분야 저장
- */
 export const saveInterests = async (
   interests: InterestsData,
 ): Promise<void> => {
@@ -137,9 +152,6 @@ export const saveInterests = async (
   }
 };
 
-/**
- * 난이도 저장
- */
 export const saveDifficulty = async (
   difficulty: LevelCategory,
 ): Promise<void> => {
@@ -151,15 +163,23 @@ export const saveDifficulty = async (
   }
 };
 
+// ──────────────────────────────────────────────
+// 온보딩 상태 초기화
+// ──────────────────────────────────────────────
+
 /**
- * 온보딩 상태 초기화
+ * 온보딩 관련 모든 AsyncStorage 키를 삭제한다.
+ *
+ * multiRemove로 4개 키를 한 번에 삭제한다. (기존: removeItem x4 순차)
  */
 export const resetOnboarding = async (): Promise<void> => {
   try {
-    await AsyncStorage.removeItem(ONBOARDING_COMPLETED_KEY);
-    await AsyncStorage.removeItem(ONBOARDING_STEP_KEY);
-    await AsyncStorage.removeItem(INTERESTS_KEY);
-    await AsyncStorage.removeItem(DIFFICULTY_KEY);
+    await AsyncStorage.multiRemove([
+      ONBOARDING_COMPLETED_KEY,
+      ONBOARDING_STEP_KEY,
+      INTERESTS_KEY,
+      DIFFICULTY_KEY,
+    ]);
   } catch (error) {
     console.error('온보딩 상태 초기화 실패:', error);
     throw error;

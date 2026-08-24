@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import {
   ARTICLE_READ_POINT_COST,
+  ARTICLE_READ_EXPERIENCE,
   AD_REWARD_POINTS,
   QUIZ_CORRECT_POINT,
   QUIZ_INCORRECT_POINT,
@@ -9,6 +10,8 @@ import {
   QUIZ_INCORRECT_EXPERIENCE,
   DAILY_ATTENDANCE_POINT,
   DAILY_ATTENDANCE_EXPERIENCE,
+  WEEKLY_ATTENDANCE_POINT,
+  WEEKLY_ATTENDANCE_EXPERIENCE,
 } from '../config/rewards';
 
 import { COLORS, scaleWidth, BORDER_RADIUS } from '../styles/global';
@@ -40,17 +43,38 @@ export const ExperienceModalContent: React.FC<{
   point?: boolean;
   correct?: boolean;
   daily?: boolean;
-}> = ({ point = false, correct = false, daily = false }) => {
-  const getPointText = daily
-    ? DAILY_ATTENDANCE_POINT
-    : correct
-    ? QUIZ_CORRECT_POINT
-    : QUIZ_INCORRECT_POINT;
-  const getExperienceText = daily
-    ? DAILY_ATTENDANCE_EXPERIENCE
-    : correct
-    ? QUIZ_CORRECT_EXPERIENCE
-    : QUIZ_INCORRECT_EXPERIENCE;
+  /**
+   * 위클리 출석 보상 합산 표시 여부
+   *
+   * 위클리 출석은 일요일 데일리 출석 시 항상 데일리 보상과 함께 지급되므로,
+   * true면 데일리 + 위클리 보상을 합산한 값을 보여준다 (별도 위클리 단독 지급은 없음).
+   */
+  weekly?: boolean;
+  /** 글 읽기 보상 팝업 여부 (경험치만 지급, 포인트 없음) */
+  articleRead?: boolean;
+}> = ({
+  point = false,
+  correct = false,
+  daily = false,
+  weekly = false,
+  articleRead = false,
+}) => {
+  const getPointText = weekly
+    ? DAILY_ATTENDANCE_POINT + WEEKLY_ATTENDANCE_POINT
+    : daily
+      ? DAILY_ATTENDANCE_POINT
+      : correct
+        ? QUIZ_CORRECT_POINT
+        : QUIZ_INCORRECT_POINT;
+  const getExperienceText = articleRead
+    ? ARTICLE_READ_EXPERIENCE
+    : weekly
+      ? DAILY_ATTENDANCE_EXPERIENCE + WEEKLY_ATTENDANCE_EXPERIENCE
+      : daily
+        ? DAILY_ATTENDANCE_EXPERIENCE
+        : correct
+          ? QUIZ_CORRECT_EXPERIENCE
+          : QUIZ_INCORRECT_EXPERIENCE;
 
   return (
     <View style={styles.modalContent}>

@@ -1,6 +1,13 @@
 /**
- * 인증 관련 서비스
- * 서버 API 연동 시 이 파일을 수정하여 실제 인증 로직 구현
+ * 인증 관련 서비스 (authService.ts)
+ *
+ * JWT 토큰, 사용자 정보의 로컬 저장/조회/삭제와
+ * 로그아웃 및 회원 탈퇴 흐름을 담당한다.
+ *
+ * AsyncStorage 키 구조:
+ *   @auth_token    - 서버 발급 액세스 토큰
+ *   @refresh_token - 서버 발급 리프레시 토큰
+ *   @user_info     - 사용자 정보 JSON (userId, provider, 소셜 토큰 등 포함)
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -8,32 +15,50 @@ import { getRecentLogin, RecentLoginInfo } from './authStorageService';
 import { signOutSocial, SocialLoginProvider } from './socialLoginService';
 import { logoutFromServer } from '../api/authApi';
 import { withdrawUser } from '../api/withdrawApi';
+import {
+  unregisterFCMToken,
+  updateNotificationStatus,
+} from '../api/notificationApi';
 
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { getAccessToken as getKakaoAccessToken } from '@react-native-seoul/kakao-login';
+import { identifyUser, resetUser } from './mixpanelService';
+import { queryClient } from '../config/queryClient';
 
 export interface AuthStatus {
   isAuthenticated: boolean;
   userInfo?: RecentLoginInfo;
 }
 
-/**
- * 현재 인증 상태 확인
- * @returns Promise<AuthStatus>
- */
+// ──────────────────────────────────────────────
+// AsyncStorage 키 상수
+// ──────────────────────────────────────────────
+const AUTH_TOKEN_KEY = '@auth_token';
+const REFRESH_TOKEN_KEY = '@refresh_token';
+const USER_INFO_KEY = '@user_info';
+const RECENT_PROVIDER_KEY = '@recent_provider';
+
+export const getRecentProvider = async (): Promise<string | null> => {
+  try {
+    return await AsyncStorage.getItem(RECENT_PROVIDER_KEY);
+  } catch (error) {
+    console.error('최근 로그인 provider 조회 실패:', error);
+    return null;
+  }
+};
+
+// ──────────────────────────────────────────────
+// 인증 상태 확인
+// ──────────────────────────────────────────────
+
 export const checkAuthStatus = async (): Promise<AuthStatus> => {
   try {
-    // 1. 로컬 스토리지에서 최근 로그인 정보 확인
     const recentLogin = await getRecentLogin();
 
     if (!recentLogin) {
       return { isAuthenticated: false };
     }
 
-    // TODO: 서버 API로 토큰 검증 (필요 시 구현)
-    // 현재는 API 호출 시 서버가 401/403을 반환하면 client.ts의 인터셉터에서 처리
-
-    // 현재는 로컬 정보만 확인
     return {
       isAuthenticated: true,
       userInfo: recentLogin,
@@ -44,26 +69,18 @@ export const checkAuthStatus = async (): Promise<AuthStatus> => {
   }
 };
 
-const AUTH_TOKEN_KEY = '@auth_token';
-const REFRESH_TOKEN_KEY = '@refresh_token';
-const USER_INFO_KEY = '@user_info';
+// ──────────────────────────────────────────────
+// 토큰 저장/조회
+// ──────────────────────────────────────────────
 
-/**
- * 인증 토큰 저장
- * @param token 인증 토큰
- */
 export const saveAuthToken = async (token: string): Promise<void> => {
   try {
-    await AsyncStorage.setItem('@auth_token', token);
+    await AsyncStorage.setItem(AUTH_TOKEN_KEY, token);
   } catch (error) {
     console.error('토큰 저장 실패:', error);
   }
 };
 
-/**
- * 리프레시 토큰 저장
- * @param refreshToken 리프레시 토큰
- */
 export const saveRefreshToken = async (refreshToken: string): Promise<void> => {
   try {
     await AsyncStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
@@ -72,10 +89,6 @@ export const saveRefreshToken = async (refreshToken: string): Promise<void> => {
   }
 };
 
-/**
- * 리프레시 토큰 조회
- * @returns Promise<string | null>
- */
 export const getRefreshToken = async (): Promise<string | null> => {
   try {
     return await AsyncStorage.getItem(REFRESH_TOKEN_KEY);
@@ -85,10 +98,10 @@ export const getRefreshToken = async (): Promise<string | null> => {
   }
 };
 
-/**
- * 사용자 정보 저장 (provider, loginTime 포함)
- * @param userInfo 사용자 정보
- */
+// ──────────────────────────────────────────────
+// 사용자 정보 저장/조회/삭제
+// ──────────────────────────────────────────────
+
 export const saveUserInfo = async (userInfo: {
   userId: number;
   name?: string;
@@ -101,15 +114,69 @@ export const saveUserInfo = async (userInfo: {
 }): Promise<void> => {
   try {
     await AsyncStorage.setItem(USER_INFO_KEY, JSON.stringify(userInfo));
+
+    if (userInfo.provider) {
+      await AsyncStorage.setItem(RECENT_PROVIDER_KEY, userInfo.provider);
+    }
   } catch (error) {
     console.error('사용자 정보 저장 실패:', error);
   }
 };
 
 /**
- * 사용자 정보 조회
- * @returns Promise<UserInfo | null>
+ * 인증 데이터(토큰 + 사용자 정보)를 AsyncStorage에 일괄 저장한다.
+ *
+ * 소셜 로그인 성공 후 saveAuthToken + saveRefreshToken + saveUserInfo를
+ * 순차 호출하면 setItem 3~4회가 발생하므로,
+ * multiSet 1회로 통합하여 로그인 체감 속도를 개선한다.
+ *
+ * 각 필드는 optional이므로 서버 응답에 포함된 항목만 저장된다.
  */
+export const saveAuthData = async (data: {
+  accessToken?: string;
+  refreshToken?: string;
+  userInfo?: {
+    userId: number;
+    name?: string;
+    email?: string;
+    profileImage?: string;
+    provider?: string;
+    loginTime?: number;
+    providerAccessToken?: string;
+    appleAuthorizationCode?: string;
+  };
+}): Promise<void> => {
+  try {
+    const pairs: [string, string][] = [];
+
+    if (data.accessToken) {
+      pairs.push([AUTH_TOKEN_KEY, data.accessToken]);
+    }
+    if (data.refreshToken) {
+      pairs.push([REFRESH_TOKEN_KEY, data.refreshToken]);
+    }
+    if (data.userInfo) {
+      pairs.push([USER_INFO_KEY, JSON.stringify(data.userInfo)]);
+      if (data.userInfo.provider) {
+        pairs.push([RECENT_PROVIDER_KEY, data.userInfo.provider]);
+      }
+    }
+
+    if (pairs.length > 0) {
+      await AsyncStorage.multiSet(pairs);
+    }
+
+    // 로그인 성공 → Mixpanel에 회원 식별 (실패해도 로그인 흐름에 영향 없음)
+    if (data.userInfo?.userId) {
+      identifyUser(data.userInfo.userId).catch(() =>
+        console.warn('[saveAuthData] Mixpanel identify 실패'),
+      );
+    }
+  } catch (error) {
+    console.error('인증 데이터 일괄 저장 실패:', error);
+  }
+};
+
 export const getUserInfo = async (): Promise<{
   userId: number;
   name?: string;
@@ -132,22 +199,15 @@ export const getUserInfo = async (): Promise<{
   }
 };
 
-/**
- * 인증 토큰 조회
- * @returns Promise<string | null>
- */
 export const getAuthToken = async (): Promise<string | null> => {
   try {
-    return await AsyncStorage.getItem('@auth_token');
+    return await AsyncStorage.getItem(AUTH_TOKEN_KEY);
   } catch (error) {
     console.error('토큰 조회 실패:', error);
     return null;
   }
 };
 
-/**
- * 사용자 정보 삭제 (로그아웃 시)
- */
 export const clearUserInfo = async (): Promise<void> => {
   try {
     await AsyncStorage.removeItem(USER_INFO_KEY);
@@ -156,76 +216,105 @@ export const clearUserInfo = async (): Promise<void> => {
   }
 };
 
+// ──────────────────────────────────────────────
+// 로그아웃
+// ──────────────────────────────────────────────
+
 /**
- * 로그아웃 - 모든 로그인 정보 및 온보딩 상태 초기화
- * @param provider 소셜 로그인 제공자
+ * 로그아웃을 처리한다.
+ *
+ * 성능 최적화:
+ *   - getUserInfo() 1회만 호출
+ *   - FCM 토큰은 AsyncStorage 캐시(@fcm_token)에서 읽음
+ *
+ * 순서 보장 (중요):
+ *   인증이 필요한 서버 API(로그아웃/FCM 해제/알림 설정)는 Authorization
+ *   헤더가 필요하다. Axios 요청 인터셉터가 AsyncStorage에서 토큰을 다시
+ *   읽는 동작은 비동기이므로, 이 요청들을 fire-and-forget으로 쏘고 곧바로
+ *   로컬 토큰을 지우면 인터셉터가 토큰을 읽기 전에 이미 삭제되어 401이
+ *   발생할 수 있다 (레이스 컨디션). 그래서 이 서버 API들은 await로 완료를
+ *   기다린 뒤에 로컬 토큰을 삭제한다.
+ *   반면 소셜 SDK 로그아웃(signOutSocial)은 백엔드 토큰과 무관한 로컬
+ *   세션 정리이므로 계속 fire-and-forget으로 처리한다.
  */
 export const logout = async (provider?: SocialLoginProvider): Promise<void> => {
   try {
-    // 자동로그인은 "로그인 시 저장된 값(@user_info/@auth_token/@refresh_token)"으로 유지됨
-
-    // 0. 현재 저장된 유저정보에서 userId/provider를 확보 (삭제 전)
     const userInfo = await getUserInfo();
     const resolvedProvider = provider ?? userInfo?.provider;
     const userId = userInfo?.userId;
+    const cachedFcmToken =
+      (await AsyncStorage.getItem('@fcm_token')) ?? undefined;
 
-    // 1. 서버 로그아웃 (실패해도 로컬 로그아웃은 진행)
+    // 인증이 필요한 서버 API: 로컬 토큰 삭제 전에 반드시 완료를 기다린다
     if (userId) {
-      try {
-        await logoutFromServer(userId);
-      } catch {
-        console.warn(
-          '[logout] 서버 로그아웃 실패 - 로컬 로그아웃은 계속 진행합니다.',
-        );
-      }
+      await Promise.allSettled([
+        logoutFromServer(userId).catch(() =>
+          console.warn('[logout] 서버 로그아웃 실패'),
+        ),
+        unregisterFCMToken(userId, cachedFcmToken).catch(e =>
+          console.warn('[logout] FCM 해제 실패:', e),
+        ),
+        updateNotificationStatus(userId, false).catch(() =>
+          console.warn('[logout] 알림 설정 리셋 실패'),
+        ),
+      ]);
     }
 
-    // 2. 소셜 로그인 로그아웃 (구글/카카오/네이버)
+    // 소셜 SDK 로그아웃: 백엔드 토큰과 무관 → 계속 fire-and-forget
     if (resolvedProvider) {
-      await signOutSocial(resolvedProvider);
+      signOutSocial(resolvedProvider).catch(e =>
+        console.warn('[logout] 소셜 로그아웃 실패:', e),
+      );
     }
 
-    // 3. 로컬 저장값 삭제 (로그아웃 후 자동로그인 방지)
+    // 로컬 저장값 일괄 삭제
     await AsyncStorage.multiRemove([
       AUTH_TOKEN_KEY,
       REFRESH_TOKEN_KEY,
       USER_INFO_KEY,
+      '@fcm_token',
+      '@fcm_token_pending',
+      '@difficulty_submit_date',
+      '@alarm_enabled',
     ]);
 
-    console.log('로그아웃 완료');
+    // Mixpanel 사용자 식별 초기화
+    resetUser();
+
+    // React Query 캐시 전체 삭제
+    // (queryClient는 앱 전체에서 하나만 쓰는 싱글턴이라 로그아웃해도 자동으로
+    //  비워지지 않는다. 캐릭터 정보 등 쿼리 키가 유저 ID로 구분되지 않기 때문에,
+    //  안 지우면 다음에 다른 계정으로 로그인했을 때 이전 계정 데이터가 캐시에서
+    //  잠깐 그대로 보이는 문제가 있었음)
+    queryClient.clear();
+
+    console.log('[logout] 완료');
   } catch (error) {
     console.error('로그아웃 중 오류:', error);
     throw error;
   }
 };
 
-/**
- * 모든 인증 및 온보딩 정보 초기화 (개발/테스트용)
- */
+// ──────────────────────────────────────────────
+// 개발/테스트 유틸
+// ──────────────────────────────────────────────
+
 export const clearAllAuthData = async (): Promise<void> => {
   try {
-    // 사용자 정보 삭제
     await clearUserInfo();
-
-    // 온보딩 상태 초기화는 onboardingStore.resetOnboarding()에서 처리
-    // 이 함수는 authService에서만 처리하므로 여기서는 로그인 정보만 삭제
-
     console.log('모든 인증 정보 초기화 완료');
   } catch (error) {
     console.error('인증 정보 초기화 중 오류:', error);
   }
 };
 
-/**
- * 회원 탈퇴 (소셜 unlink 포함)
- * - 서버 탈퇴 + unlinkSocial=true 요청
- * - 소셜 SDK 로그아웃 시도
- * - 로컬 토큰/유저정보 삭제 (자동로그인 방지)
- */
+// ──────────────────────────────────────────────
+// 회원 탈퇴
+// ──────────────────────────────────────────────
+
 export const withdraw = async (): Promise<void> => {
   try {
     const userInfo = await getUserInfo();
-
     const userId = userInfo?.userId;
     const provider = userInfo?.provider;
 
@@ -239,28 +328,22 @@ export const withdraw = async (): Promise<void> => {
     }
 
     const isApple = provider === 'APPLE';
-
-    // unlink용 값: 저장값은 backup, 탈퇴 시점에 최신값을 우선 재획득
     let providerAccessToken = userInfo?.providerAccessToken;
     const appleAuthorizationCode = userInfo?.appleAuthorizationCode;
 
     try {
       if (provider === 'GOOGLE') {
-        // 토큰 갱신 안정화
         try {
           await GoogleSignin.signInSilently();
         } catch (e) {
           console.warn('[withdraw][GOOGLE] signInSilently 실패:', e);
         }
-
         const tokens = await GoogleSignin.getTokens();
         providerAccessToken = tokens?.accessToken ?? providerAccessToken;
       }
 
       if (provider === 'KAKAO') {
         const tokenInfo: any = await getKakaoAccessToken();
-
-        // 반환 타입 방어 (string / object 모두 대응)
         if (typeof tokenInfo === 'string') {
           providerAccessToken = tokenInfo || providerAccessToken;
         } else {
@@ -271,9 +354,6 @@ export const withdraw = async (): Promise<void> => {
             providerAccessToken;
         }
       }
-
-      // NAVER: 로그인 때 저장한 accessToken 사용
-      // APPLE: 로그인 때 저장한 authorizationCode 사용
     } catch (e) {
       console.warn(
         '[withdraw] unlink 토큰 재획득 실패 - 저장된 값으로 시도합니다.',
@@ -281,7 +361,6 @@ export const withdraw = async (): Promise<void> => {
       );
     }
 
-    // unlink 위해 필요한 값이 없으면 에러
     if (!isApple && !providerAccessToken) {
       throw new Error(
         '소셜 연결 끊기에 필요한 providerAccessToken이 없습니다.',
@@ -296,47 +375,60 @@ export const withdraw = async (): Promise<void> => {
       hasAppleAuthorizationCode: !!appleAuthorizationCode,
     });
 
-    // 1) 서버 탈퇴 + 소셜 unlink
-    // undefined 값도 명시적으로 포함하기 위해 null로 변환
     const requestBody: {
       unlinkSocial: boolean;
-      providerAccessToken?: string | null;
-      appleAuthorizationCode?: string | null;
-    } = {
-      unlinkSocial: true,
-    };
+      providerAccessToken?: string;
+      appleAuthorizationCode?: string;
+    } = { unlinkSocial: true };
 
     if (!isApple) {
-      requestBody.providerAccessToken = providerAccessToken || null;
+      if (providerAccessToken) {
+        requestBody.providerAccessToken = providerAccessToken;
+      }
     } else {
-      requestBody.providerAccessToken = null;
-    }
-
-    if (isApple) {
-      requestBody.appleAuthorizationCode = appleAuthorizationCode || null;
-    } else {
-      requestBody.appleAuthorizationCode = null;
+      if (appleAuthorizationCode) {
+        requestBody.appleAuthorizationCode = appleAuthorizationCode;
+      }
     }
 
     await withdrawUser(userId, requestBody);
 
-    // 2) 소셜 SDK 로그아웃 (실패해도 로컬 정리는 진행)
-    try {
-      await signOutSocial(provider);
-    } catch {
-      console.warn(
-        '[withdraw] 소셜 로그아웃 실패 - 로컬 정리는 계속 진행합니다.',
+    // FCM 해제: Authorization 헤더가 필요하므로 로컬 토큰 삭제 전에 완료를 기다린다
+    const cachedFcmToken =
+      (await AsyncStorage.getItem('@fcm_token')) ?? undefined;
+
+    await unregisterFCMToken(userId, cachedFcmToken).catch(e =>
+      console.warn('[withdraw] FCM 해제 실패:', e),
+    );
+
+    // 소셜 SDK 로그아웃: 백엔드 토큰과 무관 → 계속 fire-and-forget
+    // 단, 카카오는 위 withdrawUser() 호출에서 unlinkSocial: true로 서버가
+    // 이미 연결을 끊었기 때문에, 이 시점에 카카오 SDK 로그아웃을 다시 호출하면
+    // 이미 무효화된 토큰으로 요청하게 되어 expired_or_invalid_refresh_token
+    // 에러가 항상 발생한다. 탈퇴 목적은 이미 달성되었으므로 재호출을 생략한다.
+    if (provider !== 'KAKAO') {
+      signOutSocial(provider).catch(() =>
+        console.warn('[withdraw] 소셜 로그아웃 실패'),
       );
     }
 
-    // 3) 로컬 저장값 삭제 (탈퇴 후 자동로그인 방지)
     await AsyncStorage.multiRemove([
       AUTH_TOKEN_KEY,
       REFRESH_TOKEN_KEY,
       USER_INFO_KEY,
+      '@fcm_token',
+      '@fcm_token_pending',
+      '@difficulty_submit_date',
+      '@alarm_enabled',
     ]);
 
-    console.log('회원 탈퇴 완료');
+    // Mixpanel 사용자 식별 초기화
+    resetUser();
+
+    // React Query 캐시 전체 삭제 (logout()과 동일한 이유)
+    queryClient.clear();
+
+    console.log('[withdraw] 완료');
   } catch (error: any) {
     console.error('[withdraw] 실패:', {
       message: error?.message,

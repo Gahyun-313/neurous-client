@@ -1,3 +1,17 @@
+/**
+ * 소셜 로그인 통합 서비스 (socialLoginService.ts)
+ *
+ * Google, Kakao, Naver, Apple 네 가지 소셜 로그인 제공자를 통합 관리한다.
+ *
+ * 처리 흐름 (모든 제공자 공통):
+ *   1. 소셜 SDK로 로그인 → 소셜 액세스 토큰 획득
+ *   2. Google은 accessToken을 서버로 전달, Apple은 Firebase Auth 사용
+ *   3. 서버 API 호출 (/api/auth/login/provider) → 서버 JWT 토큰 발급
+ *   4. 서버 토큰 + 사용자 정보를 AsyncStorage에 일괄 저장 (saveAuthData → multiSet 1회)
+ *   5. FCM 토큰 서버 등록 (백그라운드, 로그인 흐름 블로킹 없음)
+ *   6. newUser 플래그 반환 (신규/기존 사용자 구분)
+ */
+
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import {
   login as kakaoLogin,
@@ -9,15 +23,15 @@ import { GOOGLE_CONFIG, NAVER_CONFIG } from '../config/socialLoginConfig';
 import appleAuth from '@invertase/react-native-apple-authentication';
 import {
   getAuth,
-  GoogleAuthProvider,
   AppleAuthProvider,
   signInWithCredential,
-  signOut,
 } from '@react-native-firebase/auth';
 import { getApp } from '@react-native-firebase/app';
 import { loginWithProvider } from '../api/authApi';
-import { saveAuthToken, saveRefreshToken, saveUserInfo } from './authService';
-// 소셜 로그인 타입
+import { saveAuthData } from './authService';
+import { registerFCMToken } from '../api/notificationApi';
+import messaging from '@react-native-firebase/messaging';
+
 export type SocialLoginProvider = 'GOOGLE' | 'KAKAO' | 'NAVER' | 'APPLE';
 
 export interface SocialLoginResult {
@@ -30,15 +44,19 @@ export interface SocialLoginResult {
     name?: string;
     profileImage?: string;
   };
-  newUser?: boolean; // 신규 사용자 여부
+  newUser?: boolean;
   error?: string;
 }
 
-// 구글 로그인 초기화
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// 구글 로그인
+// ────────────────────────────────────────────────────────────────────────────────────────────
+
 export const initializeGoogleSignIn = () => {
   try {
     GoogleSignin.configure({
       webClientId: GOOGLE_CONFIG.webClientId,
+      scopes: ['profile', 'email'],
       offlineAccess: true,
     });
   } catch (error) {
@@ -46,122 +64,154 @@ export const initializeGoogleSignIn = () => {
   }
 };
 
-// 구글 로그인
 export const signInWithGoogle = async (): Promise<SocialLoginResult> => {
   try {
+    await GoogleSignin.hasPlayServices({
+      showPlayServicesUpdateDialog: true,
+    });
+
     await GoogleSignin.signIn();
     const tokens = await GoogleSignin.getTokens();
-    const idToken = tokens.idToken;
+    const googleAccessToken = tokens.accessToken;
 
-    if (!idToken) {
-      console.error('Google ID Token이 없습니다. tokens:', tokens);
-      throw new Error('Google ID Token이 없습니다.');
+    if (!googleAccessToken) {
+      console.error('Google Access Token이 없습니다. tokens:', tokens);
+      throw new Error('Google Access Token이 없습니다.');
     }
 
-    const authInstance = getAuth(getApp());
-    const googleCredential = GoogleAuthProvider.credential(idToken);
-    const userCredential = await signInWithCredential(
-      authInstance,
-      googleCredential,
-    );
-    const firebaseUser = userCredential.user;
-
-    // 서버 API 호출 (필수)
-    let newUser = true; // 기본값은 true (신규 사용자)
+    let newUser = true;
 
     try {
       const loginResponse = await loginWithProvider('GOOGLE', {
-        accessToken: tokens.accessToken,
-        // email: firebaseUser.email || undefined,
+        accessToken: googleAccessToken,
       });
 
-      // newUser 값 저장
       newUser = loginResponse.data?.newUser ?? true;
 
+      // 서버 응답 데이터 일괄 저장 (multiSet 1회)
       if (loginResponse.data) {
-        if (loginResponse.data.accessToken) {
-          await saveAuthToken(loginResponse.data.accessToken);
-        }
-
-        if (loginResponse.data.refreshToken) {
-          await saveRefreshToken(loginResponse.data.refreshToken);
-        }
-
-        // userInfo 저장 (provider, loginTime 포함)
-        if (loginResponse.data.userInfo) {
-          await saveUserInfo({
-            ...loginResponse.data.userInfo,
-            provider: 'GOOGLE',
-            loginTime: Date.now(),
-            providerAccessToken: tokens.accessToken,
-          });
-        }
+        await saveAuthData({
+          accessToken: loginResponse.data.accessToken,
+          refreshToken: loginResponse.data.refreshToken,
+          userInfo: loginResponse.data.userInfo
+            ? {
+                ...loginResponse.data.userInfo,
+                provider: 'GOOGLE',
+                loginTime: Date.now(),
+                providerAccessToken: googleAccessToken,
+              }
+            : undefined,
+        });
       } else if (loginResponse.token) {
-        await saveAuthToken(loginResponse.token);
-        if (loginResponse.refreshToken) {
-          await saveRefreshToken(loginResponse.refreshToken);
-        }
-        if (loginResponse.user) {
-          await saveUserInfo({
-            userId: parseInt(loginResponse.user.id, 10) || 0,
-            name: loginResponse.user.name,
-            email: loginResponse.user.email,
-            profileImage: loginResponse.user.profileImage,
-          });
-        }
+        await saveAuthData({
+          accessToken: loginResponse.token,
+          refreshToken: loginResponse.refreshToken,
+          userInfo: loginResponse.user
+            ? {
+                userId: parseInt(loginResponse.user.id, 10) || 0,
+                name: loginResponse.user.name,
+                email: loginResponse.user.email,
+                profileImage: loginResponse.user.profileImage,
+                provider: 'GOOGLE',
+                loginTime: Date.now(),
+                providerAccessToken: googleAccessToken,
+              }
+            : undefined,
+        });
       } else {
         console.warn('서버에서 토큰을 받지 못했습니다.');
-        console.warn('서버 응답:', JSON.stringify(loginResponse, null, 2));
-        console.warn('서버 응답 필드:', Object.keys(loginResponse).join(', '));
       }
-    } catch (apiError) {
+
+      // FCM 토큰 서버 등록 (백그라운드)
+      messaging()
+        .getToken()
+        .then(fcmToken => registerFCMToken(fcmToken))
+        .then(() => console.log('[구글 로그인] FCM 토큰 등록 완료'))
+        .catch(fcmError =>
+          console.warn('[구글 로그인] FCM 토큰 등록 실패:', fcmError),
+        );
+
+      const responseUserInfo = loginResponse.data?.userInfo;
+      const legacyUser = loginResponse.user;
+
+      return {
+        success: true,
+        provider: 'GOOGLE',
+        accessToken: googleAccessToken,
+        userInfo: responseUserInfo
+          ? {
+              id: String(responseUserInfo.userId ?? ''),
+              email: responseUserInfo.email,
+              name: responseUserInfo.name,
+              profileImage: responseUserInfo.profileImage,
+            }
+          : legacyUser
+            ? {
+                id: String(legacyUser.id ?? ''),
+                email: legacyUser.email,
+                name: legacyUser.name,
+                profileImage: legacyUser.profileImage,
+              }
+            : undefined,
+        newUser,
+      };
+    } catch (apiError: any) {
       console.error('서버 로그인 API 호출 실패:', apiError);
-      // 서버 API 실패 시 에러 반환 (토큰 없이는 이후 API 호출 불가)
+      console.log('[GoogleLogin] server error code:', apiError?.code);
+      console.log('[GoogleLogin] server error message:', apiError?.message);
+      console.log('[GoogleLogin] server error response:', apiError?.response);
+
       return {
         success: false,
         provider: 'GOOGLE',
         error: '서버 로그인에 실패했습니다. 다시 시도해주세요.',
       };
     }
-
-    return {
-      success: true,
-      provider: 'GOOGLE',
-      accessToken: idToken,
-      userInfo: {
-        id: firebaseUser.uid,
-        email: firebaseUser.email || undefined,
-        name: firebaseUser.displayName || undefined,
-        profileImage: firebaseUser.photoURL || undefined,
-      },
-      newUser,
-    };
   } catch (error: any) {
     console.error('구글 로그인 에러:', error);
+    console.log('[GoogleLogin] ERROR raw:', error);
+    console.log('[GoogleLogin] ERROR code:', error?.code);
+    console.log('[GoogleLogin] ERROR message:', error?.message);
+    console.log('[GoogleLogin] ERROR stack:', error?.stack);
+
+    const isCancelled =
+      error?.code === '12501' ||
+      error?.message?.includes('SIGN_IN_CANCELLED') ||
+      error?.message?.includes('Sign in action cancelled');
+
+    if (isCancelled) {
+      return {
+        success: false,
+        provider: 'GOOGLE',
+        error: '로그인이 취소되었습니다.',
+      };
+    }
+
+    return {
+      success: false,
+      provider: 'GOOGLE',
+      error: error?.message || '구글 로그인에 실패했습니다.',
+    };
   }
 };
 
-// 구글 로그아웃
 export const signOutGoogle = async (): Promise<void> => {
   try {
-    // 로그아웃 전에 Google Sign-In SDK 초기화 확인
     try {
-      // 이미 초기화되어 있는지 확인하고, 필요시 재초기화
       initializeGoogleSignIn();
     } catch (initError) {
       console.warn('구글 로그인 초기화 실패 (로그아웃 시도):', initError);
     }
-
     await GoogleSignin.signOut();
-    const authInstance = getAuth(getApp());
-    await signOut(authInstance);
   } catch (error) {
     console.error('구글 로그아웃 실패:', error);
-    // 에러가 발생해도 계속 진행 (로컬 로그아웃은 완료)
   }
 };
 
+// ────────────────────────────────────────────────────────────────────────────────────────────
 // 카카오 로그인
+// ────────────────────────────────────────────────────────────────────────────────────────────
+
 export const signInWithKakao = async (): Promise<SocialLoginResult> => {
   try {
     const token = await kakaoLogin();
@@ -181,55 +231,58 @@ export const signInWithKakao = async (): Promise<SocialLoginResult> => {
         undefined,
     };
 
-    // 서버 API 호출
-    let newUser = true; // 기본값은 true (신규 사용자)
+    let newUser = true;
 
     try {
       const loginResponse = await loginWithProvider('KAKAO', {
         accessToken: token.accessToken,
       });
 
-      // newUser 값 저장
       newUser = loginResponse.data?.newUser ?? true;
 
       if (loginResponse.data) {
-        if (loginResponse.data.accessToken) {
-          await saveAuthToken(loginResponse.data.accessToken);
-        }
-
-        if (loginResponse.data.refreshToken) {
-          await saveRefreshToken(loginResponse.data.refreshToken);
-        }
-
-        if (loginResponse.data.userInfo) {
-          await saveUserInfo({
-            ...loginResponse.data.userInfo,
-            provider: 'KAKAO',
-            loginTime: Date.now(),
-            providerAccessToken: token.accessToken,
-          });
-        }
+        await saveAuthData({
+          accessToken: loginResponse.data.accessToken,
+          refreshToken: loginResponse.data.refreshToken,
+          userInfo: loginResponse.data.userInfo
+            ? {
+                ...loginResponse.data.userInfo,
+                provider: 'KAKAO',
+                loginTime: Date.now(),
+                providerAccessToken: token.accessToken,
+              }
+            : undefined,
+        });
       } else if (loginResponse.token) {
-        await saveAuthToken(loginResponse.token);
-        if (loginResponse.refreshToken) {
-          await saveRefreshToken(loginResponse.refreshToken);
-        }
-        if (loginResponse.user) {
-          await saveUserInfo({
-            userId: parseInt(loginResponse.user.id, 10) || 0,
-            name: loginResponse.user.name,
-            email: loginResponse.user.email,
-            profileImage: loginResponse.user.profileImage,
-          });
-        }
+        await saveAuthData({
+          accessToken: loginResponse.token,
+          refreshToken: loginResponse.refreshToken,
+          userInfo: loginResponse.user
+            ? {
+                userId: parseInt(loginResponse.user.id, 10) || 0,
+                name: loginResponse.user.name,
+                email: loginResponse.user.email,
+                profileImage: loginResponse.user.profileImage,
+                provider: 'KAKAO',
+                loginTime: Date.now(),
+                providerAccessToken: token.accessToken,
+              }
+            : undefined,
+        });
       } else {
         console.warn('서버에서 토큰을 받지 못했습니다.');
-        console.warn('서버 응답:', JSON.stringify(loginResponse, null, 2));
-        console.warn('서버 응답 필드:', Object.keys(loginResponse).join(', '));
       }
+
+      // FCM 토큰 서버 등록 (백그라운드)
+      messaging()
+        .getToken()
+        .then(fcmToken => registerFCMToken(fcmToken))
+        .then(() => console.log('[카카오 로그인] FCM 토큰 등록 완료'))
+        .catch(fcmError =>
+          console.warn('[카카오 로그인] FCM 토큰 등록 실패:', fcmError),
+        );
     } catch (apiError) {
       console.error('서버 로그인 API 호출 실패:', apiError);
-      // 서버 API 실패 시 에러 반환
       return {
         success: false,
         provider: 'KAKAO',
@@ -246,10 +299,28 @@ export const signInWithKakao = async (): Promise<SocialLoginResult> => {
     };
   } catch (error: any) {
     console.error('카카오 로그인 에러:', error);
+
+    const isCancelled =
+      error?.code === 'E_CANCELLED' ||
+      error?.message?.includes('cancelled') ||
+      error?.message?.includes('취소');
+
+    if (isCancelled) {
+      return {
+        success: false,
+        provider: 'KAKAO',
+        error: '로그인이 취소되었습니다.',
+      };
+    }
+
+    return {
+      success: false,
+      provider: 'KAKAO',
+      error: error?.message || '카카오 로그인에 실패했습니다.',
+    };
   }
 };
 
-// 카카오 로그아웃
 export const signOutKakao = async (): Promise<void> => {
   try {
     await kakaoLogout();
@@ -258,7 +329,10 @@ export const signOutKakao = async (): Promise<void> => {
   }
 };
 
-// 네이버 로그인 초기화
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// 네이버 로그인
+// ────────────────────────────────────────────────────────────────────────────────────────────
+
 export const initializeNaverLogin = () => {
   try {
     if (NaverLogin && typeof NaverLogin.initialize === 'function') {
@@ -270,112 +344,139 @@ export const initializeNaverLogin = () => {
       });
     }
   } catch (error) {
-    console.warn('네이버 로그인 초기화 실패:', error);
+    console.warn('[NaverLogin] initialize failed:', error);
   }
 };
 
 export const signInWithNaver = async (): Promise<SocialLoginResult> => {
-  console.log('[NaverLogin] signInWithNaver 함수 진입'); // 👈 이 로그가 꼭 나와야 합니다!
-
   try {
     initializeNaverLogin();
 
-    // 네이버 로그인 요청 (앱 이탈 방지 옵션 필수)
-    console.log('[NaverLogin] login() 호출 시작');
-
-    // 취소 시 무한 대기 방지를 위한 타임아웃 추가 (10초)
-    // 네이버 로그인 SDK의 알려진 버그: 취소 시 Promise가 완료되지 않음
-    const loginPromise = (NaverLogin.login as any)({
-      appName: NAVER_CONFIG.appName,
-      consumerKey: NAVER_CONFIG.consumerKey,
-      consumerSecret: NAVER_CONFIG.consumerSecret,
-      serviceUrlSchemeIOS: NAVER_CONFIG.serviceUrlScheme,
-      disableNaverAppAuthIOS: true, // 앱이 꺼지지 않도록 하는 필수 옵션
-    });
-
+    const loginPromise = NaverLogin.login();
     const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => {
-        reject(new Error('TIMEOUT'));
-      }, 5000); // 10초 타임아웃 (취소 시 빠른 응답)
+      setTimeout(() => reject(new Error('TIMEOUT')), 5000);
     });
 
     let result: any;
+
     try {
       result = (await Promise.race([loginPromise, timeoutPromise])) as any;
     } catch (timeoutError: any) {
-      // 타임아웃 에러인 경우 (취소로 간주)
-      // 네이버 로그인 SDK 버그: 취소 시 Promise가 완료되지 않아 타임아웃 발생
       if (timeoutError?.message === 'TIMEOUT') {
-        console.log('[NaverLogin] 타임아웃 발생 (취소로 간주)');
+        console.log('[NaverLogin] timeout');
         return {
           success: false,
           provider: 'NAVER',
           error: '로그인이 취소되었습니다.',
         };
       }
-      // 다른 에러는 외부 catch로 전달
       throw timeoutError;
     }
 
-    // result가 없는 경우 처리
     if (!result) {
-      console.error('[NaverLogin] result가 undefined입니다.');
+      console.log('[NaverLogin] result is empty');
       return {
         success: false,
         provider: 'NAVER',
         error: '네이버 로그인 응답이 없습니다.',
       };
     }
-    // 4. 성공 처리
-    if (result?.isSuccess && result?.successResponse) {
-      console.log('[NaverLogin] 로그인 성공');
-      const accessToken = result.successResponse.accessToken;
-      const profileResult = await NaverLogin.getProfile(accessToken);
 
-      const userInfo = {
-        id: profileResult.response?.id || '',
-        email: profileResult.response?.email || undefined,
-        name: profileResult.response?.name || undefined,
-        profileImage: profileResult.response?.profile_image || undefined,
+    if (!result?.isSuccess) {
+      console.error('[NaverLogin] login failed:', {
+        failureResponse: result?.failureResponse,
+        result,
+      });
+      return {
+        success: false,
+        provider: 'NAVER',
+        error:
+          result?.failureResponse?.message ||
+          result?.failureResponse?.errorDescription ||
+          '네이버 로그인이 취소되었거나 실패했습니다.',
       };
+    }
 
-      // 서버 로그인 API 호출
-      try {
-        const loginResponse = await loginWithProvider('NAVER', {
-          accessToken,
-          email: userInfo.email,
-        });
+    const accessToken =
+      result?.successResponse?.accessToken ||
+      result?.accessToken ||
+      result?.token;
 
-        // 토큰 저장
-        if (loginResponse.data?.accessToken)
-          await saveAuthToken(loginResponse.data.accessToken);
-        if (loginResponse.data?.refreshToken)
-          await saveRefreshToken(loginResponse.data.refreshToken);
-        if (loginResponse.data?.userInfo) {
-          await saveUserInfo({
-            ...loginResponse.data.userInfo,
-            provider: 'NAVER',
-            loginTime: Date.now(),
-            providerAccessToken: accessToken,
-          });
-        }
+    if (!accessToken) {
+      console.error('[NaverLogin] successResponse:', result?.successResponse);
+      return {
+        success: false,
+        provider: 'NAVER',
+        error: '네이버 Access Token을 받지 못했습니다.',
+      };
+    }
 
-        return {
-          success: true,
-          provider: 'NAVER',
-          accessToken,
-          userInfo,
-          newUser: loginResponse.data?.newUser ?? true,
-        };
-      } catch (apiError) {
-        console.error('서버 로그인 실패:', apiError);
-        return { success: false, provider: 'NAVER', error: '서버 연동 실패' };
-      }
+    const profileResult = await NaverLogin.getProfile(accessToken);
+
+    const userInfo = {
+      id: profileResult?.response?.id || '',
+      email: profileResult?.response?.email || undefined,
+      name: profileResult?.response?.name || undefined,
+      profileImage: profileResult?.response?.profile_image || undefined,
+    };
+
+    try {
+      const loginResponse = await loginWithProvider('NAVER', {
+        accessToken,
+        email: userInfo.email,
+      });
+
+      await saveAuthData({
+        accessToken: loginResponse.data?.accessToken,
+        refreshToken: loginResponse.data?.refreshToken,
+        userInfo: loginResponse.data?.userInfo
+          ? {
+              ...loginResponse.data.userInfo,
+              provider: 'NAVER',
+              loginTime: Date.now(),
+              providerAccessToken: accessToken,
+            }
+          : undefined,
+      });
+
+      // FCM 토큰 서버 등록 (백그라운드)
+      messaging()
+        .getToken()
+        .then(fcmToken => registerFCMToken(fcmToken))
+        .then(() => console.log('[네이버 로그인] FCM 토큰 등록 완료'))
+        .catch(fcmError =>
+          console.warn('[네이버 로그인] FCM 토큰 등록 실패:', fcmError),
+        );
+
+      return {
+        success: true,
+        provider: 'NAVER',
+        accessToken,
+        userInfo,
+        newUser: loginResponse.data?.newUser ?? true,
+      };
+    } catch (apiError: any) {
+      console.error('[NaverLogin] server login failed:', apiError);
+      console.log('[NaverLogin] server error code:', apiError?.code);
+      console.log('[NaverLogin] server error message:', apiError?.message);
+      console.log('[NaverLogin] server error response:', apiError?.response);
+
+      return {
+        success: false,
+        provider: 'NAVER',
+        error: '서버 연동 실패',
+      };
     }
   } catch (error: any) {
-    // 사용자가 취소한 경우 체크
+    console.error('[NaverLogin] error:', error);
+    console.log('[NaverLogin] ERROR raw:', error);
+    console.log('[NaverLogin] ERROR code:', error?.code);
+    console.log('[NaverLogin] ERROR message:', error?.message);
+    console.log('[NaverLogin] ERROR stack:', error?.stack);
+
     const errorMessage = (error?.message || '').toLowerCase();
     const errorCode = String(error?.code || '');
+
     const isCancel =
       errorCode === 'USER_CANCEL' ||
       errorCode === 'CANCELLED' ||
@@ -383,16 +484,16 @@ export const signInWithNaver = async (): Promise<SocialLoginResult> => {
       errorMessage.includes('취소') ||
       errorMessage.includes('cancel') ||
       errorMessage.includes('cancelled') ||
-      errorMessage === 'timeout'; // 타임아웃도 취소로 간주
+      errorMessage === 'timeout';
 
     if (isCancel) {
-      console.log('[NaverLogin] ✅ 사용자가 로그인을 취소했습니다.');
       return {
         success: false,
         provider: 'NAVER',
         error: '로그인이 취소되었습니다.',
       };
     }
+
     return {
       success: false,
       provider: 'NAVER',
@@ -401,68 +502,28 @@ export const signInWithNaver = async (): Promise<SocialLoginResult> => {
   }
 };
 
-// 네이버 로그아웃
 export const signOutNaver = async (): Promise<void> => {
   try {
     await NaverLogin.logout();
+    console.log('[NaverLogin] logout success');
   } catch (error) {
-    console.error('네이버 로그아웃 실패:', error);
+    console.error('[NaverLogin] logout failed:', error);
   }
 };
 
-// 통합 소셜 로그인 함수
-export const signInWithSocial = async (
-  provider: SocialLoginProvider,
-): Promise<SocialLoginResult> => {
-  switch (provider) {
-    case 'GOOGLE':
-      return signInWithGoogle();
-    case 'KAKAO':
-      return signInWithKakao();
-    case 'NAVER':
-      return signInWithNaver();
-    case 'APPLE':
-      return signInWithApple();
-    default:
-      return {
-        success: false,
-        provider,
-        error: '지원하지 않는 소셜 로그인입니다',
-      };
-  }
-};
-
-// 통합 로그아웃 함수
-export const signOutSocial = async (
-  provider: SocialLoginProvider,
-): Promise<void> => {
-  switch (provider) {
-    case 'GOOGLE':
-      await signOutGoogle();
-      break;
-    case 'KAKAO':
-      await signOutKakao();
-      break;
-    case 'NAVER':
-      await signOutNaver();
-      break;
-    case 'APPLE':
-      break;
-  }
-};
+// ────────────────────────────────────────────────────────────────────────────────────────────
 // 애플 로그인
-export const signInWithApple = async (): Promise<SocialLoginResult> => {
-  let appleAuthRequestResponse: any = null;
-  let identityToken: string | null = null;
+// ────────────────────────────────────────────────────────────────────────────────────────────
 
+export const signInWithApple = async (): Promise<SocialLoginResult> => {
   try {
-    appleAuthRequestResponse = await appleAuth.performRequest({
+    const appleAuthRequestResponse = await appleAuth.performRequest({
       requestedOperation: appleAuth.Operation.LOGIN,
       requestedScopes: [appleAuth.Scope.EMAIL, appleAuth.Scope.FULL_NAME],
     });
 
     const authorizationCode = appleAuthRequestResponse.authorizationCode;
-    identityToken = appleAuthRequestResponse.identityToken;
+    const identityToken = appleAuthRequestResponse.identityToken;
     const { user } = appleAuthRequestResponse;
 
     if (!identityToken) {
@@ -495,62 +556,59 @@ export const signInWithApple = async (): Promise<SocialLoginResult> => {
       profileImage: undefined,
     };
 
-    // 서버 API 호출
-    let newUser = true; // 기본값은 true (신규 사용자)
+    let newUser = true;
 
     try {
       const loginResponse = await loginWithProvider('APPLE', {
         accessToken: identityToken,
         email: userInfo.email,
-        // name: userInfo.name,
-        // profileImage: userInfo.profileImage,
       });
 
-      // newUser 값 저장
       newUser = loginResponse.data?.newUser ?? true;
 
-      // 서버에서 받은 데이터 저장
       if (loginResponse.data) {
-        // accessToken 저장
-        if (loginResponse.data.accessToken) {
-          await saveAuthToken(loginResponse.data.accessToken);
-        }
-
-        // refreshToken 저장
-        if (loginResponse.data.refreshToken) {
-          await saveRefreshToken(loginResponse.data.refreshToken);
-        }
-
-        // userInfo 저장
-        if (loginResponse.data.userInfo) {
-          await saveUserInfo({
-            ...loginResponse.data.userInfo,
-            provider: 'APPLE',
-            loginTime: Date.now(),
-            appleAuthorizationCode: authorizationCode || undefined,
-          });
-        }
+        await saveAuthData({
+          accessToken: loginResponse.data.accessToken,
+          refreshToken: loginResponse.data.refreshToken,
+          userInfo: loginResponse.data.userInfo
+            ? {
+                ...loginResponse.data.userInfo,
+                provider: 'APPLE',
+                loginTime: Date.now(),
+                appleAuthorizationCode: authorizationCode || undefined,
+              }
+            : undefined,
+        });
       } else if (loginResponse.token) {
-        await saveAuthToken(loginResponse.token);
-        if (loginResponse.refreshToken) {
-          await saveRefreshToken(loginResponse.refreshToken);
-        }
-        if (loginResponse.user) {
-          await saveUserInfo({
-            userId: parseInt(loginResponse.user.id, 10) || 0,
-            name: loginResponse.user.name,
-            email: loginResponse.user.email,
-            profileImage: loginResponse.user.profileImage,
-          });
-        }
+        await saveAuthData({
+          accessToken: loginResponse.token,
+          refreshToken: loginResponse.refreshToken,
+          userInfo: loginResponse.user
+            ? {
+                userId: parseInt(loginResponse.user.id, 10) || 0,
+                name: loginResponse.user.name,
+                email: loginResponse.user.email,
+                profileImage: loginResponse.user.profileImage,
+                provider: 'APPLE',
+                loginTime: Date.now(),
+                appleAuthorizationCode: authorizationCode || undefined,
+              }
+            : undefined,
+        });
       } else {
         console.warn('서버에서 토큰을 받지 못했습니다.');
-        console.warn('서버 응답:', JSON.stringify(loginResponse, null, 2));
-        console.warn('서버 응답 필드:', Object.keys(loginResponse).join(', '));
       }
+
+      // FCM 토큰 서버 등록 (백그라운드)
+      messaging()
+        .getToken()
+        .then(fcmToken => registerFCMToken(fcmToken))
+        .then(() => console.log('[애플 로그인] FCM 토큰 등록 완료'))
+        .catch(fcmError =>
+          console.warn('[애플 로그인] FCM 토큰 등록 실패:', fcmError),
+        );
     } catch (apiError) {
       console.error('서버 로그인 API 호출 실패:', apiError);
-      // 서버 API 실패 시 에러 반환
       return {
         success: false,
         provider: 'APPLE',
@@ -572,5 +630,56 @@ export const signInWithApple = async (): Promise<SocialLoginResult> => {
       provider: 'APPLE',
       error: err.message || '애플 로그인 실패',
     };
+  }
+};
+
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// 통합 함수
+// ────────────────────────────────────────────────────────────────────────────────────────────
+
+export const signInWithSocial = async (
+  provider: SocialLoginProvider,
+): Promise<SocialLoginResult> => {
+  switch (provider) {
+    case 'GOOGLE':
+      console.log('[GoogleLogin] before signInWithGoogle');
+      return signInWithGoogle();
+
+    case 'KAKAO':
+      console.log('[KakaoLogin] before signInWithKakao');
+      return signInWithKakao();
+
+    case 'NAVER':
+      console.log('[NaverLogin] before signInWithNaver');
+      return signInWithNaver();
+
+    case 'APPLE':
+      console.log('[AppleLogin] before signInWithApple');
+      return signInWithApple();
+
+    default:
+      return {
+        success: false,
+        provider,
+        error: '지원하지 않는 소셜 로그인입니다',
+      };
+  }
+};
+
+export const signOutSocial = async (
+  provider: SocialLoginProvider,
+): Promise<void> => {
+  switch (provider) {
+    case 'GOOGLE':
+      await signOutGoogle();
+      break;
+    case 'KAKAO':
+      await signOutKakao();
+      break;
+    case 'NAVER':
+      await signOutNaver();
+      break;
+    case 'APPLE':
+      break;
   }
 };

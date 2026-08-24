@@ -1,3 +1,19 @@
+/**
+ * 아티클 클릭 및 네비게이션 처리 커스텀 훅
+ *
+ * 아티클 카드 클릭 시 접근 권한 확인 → 모달 표시 → 화면 이동까지의
+ * 전체 흐름을 통합 관리함.
+ *
+ * [처리 흐름]
+ * 아티클 클릭
+ *   ↓
+ * fetchContentAccess로 접근 권한 확인
+ *   ↓ 이미 읽은 글       → ReadArticleDetail 이동 (접근 권한 확인 생략)
+ *   ↓ 무료 열람 가능     → ArticleDetail 이동 (openType: 'free')
+ *   ↓ 포인트 충분        → "새 글 읽기" 모달 → 포인트 구매 → ArticleDetail 이동
+ *   ↓ 포인트 부족        → "광고 시청" 모달  → AdLoading 이동
+ *   ↓ 에러 발생          → Alert 표시
+ */
 import React, { useCallback, useRef } from 'react';
 import { Alert, ActivityIndicator, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
@@ -19,33 +35,91 @@ import {
 import { getUserInfo } from '../services/authService';
 import { usePointStore } from '../store/pointStore';
 import { logEvent, logScreenView } from '../services/analyticsService';
+import { trackEvent, ArticleEntrySource } from '../services/mixpanelService';
 
+/**
+ * 아티클 읽기 후 돌아갈 화면
+ * - 'mission' : 미션 화면
+ * - 'search'  : 검색 화면
+ */
 type ReturnTo = 'mission' | 'search';
 
+/**
+ * useArticleNavigation 훅 옵션
+ *
+ * @property returnTo     아티클 읽기 완료 후 돌아갈 화면
+ * @property entrySource  진입 경로 (Mixpanel article_start의 entry_source)
+ *                        home: 홈 추천 글 / explore: 탐색 / search: 검색 결과
+ */
 interface UseArticleNavigationOptions {
   returnTo: ReturnTo;
+  entrySource: ArticleEntrySource;
 }
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 /**
- * 기사 클릭 및 네비게이션 처리 커스텀 훅
- * 포인트 확인, 모달 표시, 네비게이션을 통합 관리
+ * 아티클 클릭 및 네비게이션 처리 커스텀 훅
+ *
+ * [중복 호출 방지]
+ * isProcessingRef를 사용해 동일 아티클에 대한 중복 클릭을 차단함.
+ * state가 아닌 ref를 쓰는 이유: 리렌더링 없이 즉시 값을 갱신해야 하기 때문.
+ *
+ * [포인트 우선순위]
+ * fetchContentAccess 응답의 currentPoints를 우선 사용하고,
+ * 값이 없으면 pointStore의 로컬 포인트를 fallback으로 사용함.
+ *
+ * @param returnTo  아티클 읽기 완료 후 돌아갈 화면 ('mission' | 'search')
+ * @returns         handleArticlePress — 아티클 카드에 연결할 클릭 핸들러
  */
 export const useArticleNavigation = ({
   returnTo,
+  entrySource,
 }: UseArticleNavigationOptions): {
-  handleArticlePress: (articleId: number) => void;
+  handleArticlePress: (
+    articleId: number,
+    isRead?: boolean,
+    category?: string,
+  ) => void;
 } => {
   const navigation = useNavigation<NavigationProp>();
   const showModal = useShowModal();
   const hideModal = useHideModal();
+
+  // 중복 클릭 방지 플래그 (state 대신 ref 사용 — 리렌더링 없이 즉시 갱신)
   const isProcessingRef = useRef(false);
   const { points: storePoints } = usePointStore();
 
+  /**
+   * 아티클 카드 클릭 핸들러
+   *
+   * [처리 순서]
+   * 1. 이미 읽은 글이면 ReadArticleDetailScreen으로 바로 이동
+   * 2. 중복 클릭 방지 (isProcessingRef)
+   * 3. 유저 정보 조회
+   * 4. fetchContentAccess로 접근 권한 및 포인트 확인
+   * 5-A. readable === true → 무료 열람권 / 이미 구매한 글 → ArticleDetail 이동
+   * 5-B. 포인트 충분 → 포인트 사용 확인 모달 → 구매 후 ArticleDetail 이동
+   * 5-C. 포인트 부족 → 광고 시청 안내 모달 → AdLoading 이동
+   */
   const handleArticlePress = useCallback(
-    async (articleId: number) => {
-      // 중복 호출 방지
+    async (articleId: number, isRead?: boolean, category?: string) => {
+      // 이미 읽은 글이면 접근 권한 확인 없이 바로 이동
+      if (isRead === true) {
+        console.log(
+          '[useArticleNavigation] 이미 읽은 글 → ReadArticleDetailScreen 이동',
+        );
+        navigation.navigate(RouteNames.FULL_SCREEN_STACK, {
+          screen: RouteNames.READ_ARTICLE_DETAIL,
+          params: {
+            articleId,
+            entrySource,
+          },
+        });
+        return;
+      }
+
+      // 이전 요청이 아직 처리 중이면 무시 (빠른 연속 클릭 방지)
       if (isProcessingRef.current) {
         console.log('[useArticleNavigation] 이미 처리 중, 중복 호출 방지');
         return;
@@ -54,24 +128,21 @@ export const useArticleNavigation = ({
       isProcessingRef.current = true;
 
       try {
-        // 사용자 정보 가져오기
         const userInfo = await getUserInfo();
         if (!userInfo) {
           Alert.alert('오류', '사용자 정보를 찾을 수 없습니다.');
           return;
         }
 
-        // 글 접근 권한 확인 API 호출
+        // 접근 권한 확인: 읽기 가능 여부 + 현재 포인트 조회
         const accessResponse = await fetchContentAccess(
           userInfo.userId,
           articleId,
         );
 
-        // console.log('[useArticleNavigation] 접근 권한 응답:', accessResponse);
-
         const accessData = accessResponse.data;
 
-        // API 응답의 currentPoints가 없으면 스토어의 포인트 사용
+        // API 응답의 currentPoints가 없으면 pointStore 로컬 값으로 fallback
         const currentPoints =
           accessData.currentPoints !== undefined
             ? accessData.currentPoints
@@ -84,12 +155,36 @@ export const useArticleNavigation = ({
           currentPoints,
         });
 
-        // readable이 false면 모달 표시
-        // 포인트 확인
+        /**
+         * readable === true: 추가 결제 없이 바로 읽을 수 있는 글
+         * - 무료 열람권 잔여 횟수 있음 (accessType: null)
+         * - 이미 포인트/광고로 구매한 글
+         */
+        if (accessData.readable) {
+          navigation.navigate(RouteNames.FULL_SCREEN_STACK, {
+            screen: RouteNames.ARTICLE_DETAIL,
+            params: {
+              articleId,
+              returnTo,
+              openType: 'free',
+              entrySource,
+            },
+          });
+
+          isProcessingRef.current = false; // 네비게이션 완료 후 클릭 허용
+          return;
+        }
+
         if (currentPoints >= ARTICLE_READ_POINT_COST) {
-          // 포인트가 충분한 경우 - 포인트 사용 모달
-          // 모달 표시 시 애널리틱스 로그
+          // ───────────────────────────────────────────
+          // 포인트 충분 → 포인트 사용 확인 모달
+          // ───────────────────────────────────────────
           await logScreenView('Popup_Reading', undefined, true);
+          trackEvent('point_use_popup_view', {
+            article_id: articleId,
+            category,
+          });
+          isProcessingRef.current = false; // 모달 표시 시점에 처리 완료 → 모달 내 버튼 클릭 허용
 
           showModal({
             title: '새로운 글을 읽으시겠어요?',
@@ -101,13 +196,12 @@ export const useArticleNavigation = ({
               title: '새 글 읽기',
               textStyle: Heading_16B,
               onPress: async () => {
-                // 중복 호출 방지
-
+                // 모달 내 버튼도 중복 클릭 방지
                 if (isProcessingRef.current) {
                   console.log(
                     '[useArticleNavigation] 포인트 구매 이미 처리 중, 중복 호출 방지',
                   );
-                  // 로딩 모달 표시
+                  // 처리 중 로딩 모달로 교체
                   showModal({
                     title: '처리 중...',
                     children: React.createElement(
@@ -127,7 +221,13 @@ export const useArticleNavigation = ({
 
                 isProcessingRef.current = true;
 
-                // 로딩 모달 표시
+                // 포인트 사용해 글 읽기 선택
+                trackEvent('point_use_confirm', {
+                  article_id: articleId,
+                  category,
+                });
+
+                // 구매 처리 중 로딩 모달 표시
                 showModal({
                   title: '처리 중...',
                   children: React.createElement(
@@ -143,7 +243,6 @@ export const useArticleNavigation = ({
                 });
 
                 try {
-                  // 사용자 정보 가져오기
                   const purchaseUserInfo = await getUserInfo();
                   if (!purchaseUserInfo) {
                     hideModal();
@@ -152,7 +251,7 @@ export const useArticleNavigation = ({
                     return;
                   }
 
-                  // 포인트로 컨텐츠 구매 API 호출
+                  // 포인트 차감 및 읽기 권한 부여
                   const purchaseResponse = await purchaseContentWithPoint(
                     purchaseUserInfo.userId,
                     articleId,
@@ -163,12 +262,14 @@ export const useArticleNavigation = ({
                     purchaseResponse,
                   );
 
-                  // 구매 성공 후 글 상세 화면으로 이동
+                  // 구매 성공 → ArticleDetail 화면으로 이동
                   navigation.navigate(RouteNames.FULL_SCREEN_STACK, {
                     screen: RouteNames.ARTICLE_DETAIL,
                     params: {
                       articleId,
                       returnTo,
+                      openType: 'point',
+                      entrySource,
                     },
                   });
                 } catch (error: any) {
@@ -183,9 +284,8 @@ export const useArticleNavigation = ({
                       '포인트 구매에 실패했습니다.',
                   );
                 } finally {
-                  // 로딩 모달 닫기
                   hideModal();
-                  // 네비게이션 후 리셋 (다음 기사 읽기 가능하도록)
+                  // 네비게이션 완료 후 1초 뒤 플래그 리셋 (연속 클릭 방지)
                   setTimeout(() => {
                     isProcessingRef.current = false;
                   }, 1000);
@@ -194,13 +294,19 @@ export const useArticleNavigation = ({
             },
           });
         } else {
-          // 포인트가 부족한 경우 - 광고 시청 모달
-          // 모달 표시 시 애널리틱스 로그
+          // ───────────────────────────────────────────
+          // 포인트 부족 → 광고 시청 안내 모달
+          // ───────────────────────────────────────────
           await logScreenView('Popup_Advertisement', undefined, true);
+          trackEvent('ad_popup_view', {
+            article_id: articleId,
+            category,
+          });
+          isProcessingRef.current = false; // 모달 표시 시점에 처리 완료 → 모달 내 버튼 클릭 허용
 
           showModal({
             title: '광고를 보고 포인트 받으시겠어요?',
-            description: `부족한 포인트: ${currentPoints}p`,
+            description: `부족한 포인트:${ARTICLE_READ_POINT_COST - currentPoints}p`,
             descriptionColor: COLORS.gray600,
             closeButton: true,
             children: React.createElement(ArticlePointModalContentGet),
@@ -209,11 +315,13 @@ export const useArticleNavigation = ({
               textStyle: Heading_16B,
               onPress: () => {
                 logEvent('GetAndRead_Popup_Advertisement');
+                // 광고 로딩 화면으로 이동 (광고 시청 완료 후 아티클 접근)
                 navigation.navigate(RouteNames.FULL_SCREEN_STACK, {
                   screen: RouteNames.AD_LOADING,
                   params: {
                     articleId,
                     returnTo,
+                    entrySource,
                   },
                 });
               },
@@ -222,15 +330,11 @@ export const useArticleNavigation = ({
         }
       } catch (error: any) {
         console.error('[useArticleNavigation] 에러:', error);
+        isProcessingRef.current = false; // fetchContentAccess 에러 시 즉시 리셋 → 재시도 가능
         Alert.alert('오류', '글 접근 권한을 확인하는 중 오류가 발생했습니다.');
-      } finally {
-        // 에러 발생 시에도 리셋
-        setTimeout(() => {
-          isProcessingRef.current = false;
-        }, 1000);
       }
     },
-    [showModal, hideModal, navigation, returnTo, storePoints],
+    [showModal, hideModal, navigation, returnTo, entrySource, storePoints],
   );
 
   return { handleArticlePress };

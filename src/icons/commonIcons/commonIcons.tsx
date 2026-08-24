@@ -4,6 +4,7 @@ import {
   createIconComponent,
   createRectangleIconComponent,
 } from '../config/iconUtils';
+import Level_change_check from '../../assets/svg/Level_change_check.svg';
 import Check from '../../assets/svg/Check_.svg';
 import Close from '../../assets/svg/Close_.svg';
 import First from '../../assets/svg/First.svg';
@@ -29,12 +30,17 @@ import BottomModalCheck from '../../assets/svg/bottomModalCheck.svg';
 import Note from '../../assets/svg/note.svg';
 import Clock from '../../assets/svg/clock.svg';
 import NoArticles from '../../assets/svg/noArticles.svg';
+import NoNotifications from '../../assets/svg/noNotifications.svg';
 import Search_tab from '../../assets/svg/search_tab.svg';
 import View from '../../assets/svg/View.svg';
 import P_Icon from '../../assets/svg/P_Icon.svg';
 import XP_Icon from '../../assets/svg/XP_Icon.svg';
 import X_icon from '../../assets/svg/X_icon.svg';
 
+export const LevelChangeCheckIcon = createIconComponent(
+  Level_change_check,
+  scaleWidth(28),
+);
 export const Ic_backIcon = createIconComponent(Icon_back, ICON_SIZES.XL);
 export const CircleIcon = createIconComponent(Circle, scaleWidth(14));
 export const InfoIcon = createIconComponent(Info, ICON_SIZES.L);
@@ -98,4 +104,9 @@ export const NoArticlesIcon = createRectangleIconComponent(
   NoArticles,
   scaleWidth(64),
   scaleWidth(62),
+);
+export const NoNotificationsIcon = createRectangleIconComponent(
+  NoNotifications,
+  scaleWidth(76),
+  scaleWidth(76),
 );

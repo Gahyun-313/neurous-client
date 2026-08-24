@@ -25,6 +25,7 @@ import { useExploreContents } from '../../hooks/useExploreContents';
 
 import { COLORS, scaleWidth } from '../../styles/global';
 import { logEvent } from '../../services/analyticsService';
+import { trackEvent } from '../../services/mixpanelService';
 import { getImageUrl } from '../../utils/imageUtils';
 
 /**
@@ -57,7 +58,10 @@ export default function SearchResultScreen() {
   } = useExploreContents(undefined);
 
   // 기사 클릭 시 상세 이동(포인트/구매/모달 로직 포함)
-  const { handleArticlePress } = useArticleNavigation({ returnTo: 'search' });
+  const { handleArticlePress } = useArticleNavigation({
+    returnTo: 'search',
+    entrySource: 'search',
+  });
 
   // pages -> contents -> UI 모델 변환
   const allVisibleData: NewsItems[] = useMemo(() => {
@@ -73,6 +77,7 @@ export default function SearchResultScreen() {
       imageUrl: getImageUrl(c.imgUrl),
       content: '',
       hits: (c as any).hits ?? 0,
+      read: (c as any).isRead ?? false,
     }));
   }, [data]);
 
@@ -145,7 +150,13 @@ export default function SearchResultScreen() {
                   const parsed = Number(item.id);
                   if (Number.isNaN(parsed)) return;
 
-                  handleArticlePress(parsed);
+                  // 검색 결과에서 글 선택
+                  trackEvent('search_result_click', {
+                    article_id: parsed,
+                    category: item.category,
+                  });
+
+                  handleArticlePress(parsed, item.read, item.category);
                   logEvent(`ContectsList${index + 1}_Search`);
                 }}
               />
@@ -171,8 +182,8 @@ export default function SearchResultScreen() {
                 {isError
                   ? '데이터를 불러오지 못했습니다.'
                   : hasNextPage
-                  ? '검색 결과를 찾는 중입니다...'
-                  : '검색 결과가 없습니다.'}
+                    ? '검색 결과를 찾는 중입니다...'
+                    : '검색 결과가 없습니다.'}
               </Text>
             }
           />

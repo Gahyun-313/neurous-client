@@ -1,3 +1,28 @@
+/**
+ * 미션 화면 (MissionScreen.tsx)
+ *
+ * 앱의 메인 홈 화면으로, 오늘의 미션과 추천 아티클을 표시한다.
+ *
+ * 주요 기능:
+ *   1. 오늘의 미션 캐러셀 (수평 스크롤)
+ *   2. 추천 아티클 목록 (수직 스크롤)
+ *   3. 일일 출석 체크 (포인트 & 경험치 지급)
+ *   4. 레벨업 모달 표시 (AsyncStorage에서 감지)
+ *   5. Android 뒤로가기 종료 처리 (2초 내 두 번 누르면 종료)
+ *
+ * 캐러셀 구조:
+ *   - 첫 번째/마지막 카드: 353px 너비 (더 넓음)
+ *   - 중간 카드: 348px 너비
+ *   - 카드 간격: 10px
+ *   - Snap 효과: 각 카드가 화면 중앙에 정렬
+ *
+ * 온보딩 리셋 조건:
+ *   - 컨텐츠가 빈 배열이고
+ *   - 온보딩이 완료된 상태이며
+ *   - 관심분야가 선택되지 않았을 때
+ *   → 관심분야 선택 단계로 리셋
+ */
+
 import React, {
   useState,
   useRef,
@@ -27,6 +52,10 @@ import {
 } from '../../styles/typography';
 import Spacer from '../../components/Spacer';
 import { useMissions } from '../../hooks/useMissions';
+import { prefetchCharacterAfterReward } from '../../hooks/useCharacter';
+import { prefetchPointHistoryAfterReward } from '../../hooks/usePointHistory';
+// 위클리 출석 완료 여부를 서버 출석 기록(월~토)으로 판단하기 위해 직접 조회
+import { fetchCharacterMe } from '../../api/characterApi';
 import { MissionCard, ArticleCard } from '../../components';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useArticleNavigation } from '../../hooks/useArticleNavigation';
@@ -44,22 +73,48 @@ import { useOnboardingStore } from '../../store/onboardingStore';
 import {
   DAILY_ATTENDANCE_EXPERIENCE,
   DAILY_ATTENDANCE_POINT,
+  WEEKLY_ATTENDANCE_EXPERIENCE,
+  WEEKLY_ATTENDANCE_POINT,
 } from '../../config/rewards';
 import { useExperienceStore } from '../../store/experienceStore';
 import IconButton from '../../components/IconButton';
 import { AlarmIcon, Modal_IMG } from '../../icons';
 import { logEvent, logScreenView } from '../../services/analyticsService';
+import { trackEvent } from '../../services/mixpanelService';
+import { getLocalDateKey } from '../../utils/dateUtils';
+
+// ──────────────────────────────────────────────
+// 상수 정의
+// ──────────────────────────────────────────────
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const WIDTH_EDGE = scaleWidth(353); // 처음과 마지막 카드 너비
-const WIDTH_MID = scaleWidth(348); // 중간 카드 너비
-const GAP = scaleWidth(10); // 카드 사이 간격
+
+/** 첫 번째와 마지막 미션 카드 너비 (더 넓음) */
+const WIDTH_EDGE = scaleWidth(353);
+
+/** 중간 미션 카드 너비 */
+const WIDTH_MID = scaleWidth(348);
+
+/** 카드 사이 간격 */
+const GAP = scaleWidth(10);
+
+/** 스크롤 이벤트 쓰로틀링 (60fps) */
 const SCROLL_EVENT_THROTTLE = 16;
+
+/** 일일 출석 체크 AsyncStorage 키 */
 const DAILY_MISSION_ENTRY_KEY = '@daily_mission_entry';
 
-// 첫 번째 카드를 중앙에 배치하기 위한 좌우 여백
+/**
+ * 첫 번째 카드를 화면 중앙에 배치하기 위한 좌우 여백
+ *
+ * 계산식:
+ *   SIDE_SPACING = (화면 너비 - 첫 카드 너비) / 2
+ *
+ * 이렇게 하면 첫 카드가 화면 중앙에 정확히 위치한다.
+ */
 const SIDE_SPACING = (SCREEN_WIDTH - WIDTH_EDGE) / 2;
 
+// 퀴즈 보상 상수 re-export
 export {
   QUIZ_CORRECT_EXPERIENCE,
   QUIZ_CORRECT_POINT,
@@ -68,44 +123,116 @@ export {
 } from '../../config/rewards';
 
 const MissionScreen = () => {
-  const scrollViewRef = useRef<ScrollView>(null);
-  const verticalScrollViewRef = useRef<ScrollView>(null);
-  const [currentIndex, setCurrentIndex] = useState(0);
   const navigation =
     useNavigation<MainTabNavigationProp<MissionStackParamList>>();
-  const { handleArticlePress } = useArticleNavigation({ returnTo: 'mission' });
+
+  // ──────────────────────────────────────────────
+  // Refs
+  // ──────────────────────────────────────────────
+
+  /** 미션 캐러셀 ScrollView 참조 (수평 스크롤) */
+  const scrollViewRef = useRef<ScrollView>(null);
+
+  /** 전체 ScrollView 참조 (수직 스크롤) */
+  const verticalScrollViewRef = useRef<ScrollView>(null);
+
+  /**
+   * 일일 출석 체크 완료 여부 플래그
+   *
+   * 앱 실행 중 한 번만 체크하도록 방지
+   * (화면 재진입 시 중복 체크 방지)
+   */
+  const hasCheckedDailyEntryRef = useRef(false);
+
+  /**
+   * Android 뒤로가기 종료 타이머
+   *
+   * 2초 내에 두 번째 뒤로가기를 누르면 앱 종료
+   */
+  const backPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /**
+   * 빈 컨텐츠 체크 완료 여부 플래그
+   *
+   * 온보딩 리셋을 한 번만 실행하도록 방지
+   */
+  const hasCheckedEmptyContentsRef = useRef(false);
+
+  // ──────────────────────────────────────────────
+  // State
+  // ──────────────────────────────────────────────
+
+  /**
+   * 현재 캐러셀에서 선택된 미션 인덱스
+   *
+   * 캐러셀 인디케이터 표시에 사용
+   */
+  const [currentIndex, setCurrentIndex] = useState(0);
+
+  // ──────────────────────────────────────────────
+  // Hooks
+  // ──────────────────────────────────────────────
+
+  /** 아티클 클릭 핸들러 (글 읽기 화면으로 이동) */
+  const { handleArticlePress } = useArticleNavigation({
+    returnTo: 'mission',
+    entrySource: 'home',
+  });
 
   const showModal = useShowModal();
   const showToastModal = useShowToastModal();
   const { addPoints } = usePointStore();
   const { addExperience } = useExperienceStore();
-  const hasCheckedDailyEntryRef = useRef(false);
-  const backPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // 데이터 로딩
+  /**
+   * 미션 및 컨텐츠 데이터 조회
+   *
+   * 응답 데이터:
+   *   - missions: 오늘의 미션 목록
+   *   - contents: 추천 아티클 목록
+   */
   const {
     data: missionData,
     isLoading: missionsLoading,
     refetch: refetchMissions,
   } = useMissions();
 
-  // 온보딩 상태 관리
+  /** 온보딩 상태 관리 */
   const { resetOnboarding, isOnboardingCompleted, interests } =
     useOnboardingStore();
-  const hasCheckedEmptyContentsRef = useRef(false);
 
-  // 컨텐츠가 빈 배열이고 관심분야가 선택되지 않았을 때만 온보딩 화면으로 리다이렉트
+  // ──────────────────────────────────────────────
+  // Effect 1: 빈 컨텐츠 감지 및 온보딩 리셋
+  // ──────────────────────────────────────────────
+
+  /**
+   * 컨텐츠가 비어있고 관심분야가 선택되지 않았을 때 온보딩으로 리셋
+   *
+   * 리셋 조건:
+   *   1. contents 배열이 비어있음
+   *   2. 온보딩이 완료된 상태 (isOnboardingCompleted === true)
+   *   3. 관심분야가 선택되지 않음 (interests가 null이거나 빈 객체)
+   *   4. 아직 체크하지 않음 (hasCheckedEmptyContentsRef === false)
+   *
+   * 리셋 동작:
+   *   - resetOnboarding('interests') 호출
+   *   - 관심분야 선택 화면으로 이동
+   *
+   * 플래그 리셋 조건:
+   *   - 컨텐츠가 다시 생기거나 관심분야가 선택되면
+   *     hasCheckedEmptyContentsRef를 false로 리셋
+   *     (다시 빈 배열이 될 수 있으므로)
+   */
   useEffect(() => {
     if (!missionsLoading && missionData) {
       const contents = missionData.contents || [];
-      // 관심분야가 선택되었는지 확인 (null이거나 빈 객체가 아니면 선택됨)
+
+      // 관심분야가 선택되었는지 확인
       const hasInterests =
         interests !== null &&
         typeof interests === 'object' &&
         Object.keys(interests).length > 0;
 
-      // 컨텐츠가 빈 배열이고, 온보딩이 완료된 상태이며, 관심분야가 선택되지 않았을 때만 리셋
-      // (온보딩이 이미 진행 중이면 리셋하지 않음)
       if (
         contents.length === 0 &&
         isOnboardingCompleted &&
@@ -116,10 +243,9 @@ const MissionScreen = () => {
           '[MissionScreen] 컨텐츠가 빈 배열이고 관심분야가 선택되지 않았습니다. 온보딩 상태를 리셋합니다.',
         );
         hasCheckedEmptyContentsRef.current = true;
-        // 온보딩 리셋 시 관심분야 선택 단계로 설정
         resetOnboarding('interests');
       } else if (contents.length > 0 || hasInterests) {
-        // 컨텐츠가 있거나 관심분야가 있으면 플래그 리셋 (다시 빈 배열이 될 수 있으므로)
+        // 컨텐츠가 있거나 관심분야가 있으면 플래그 리셋
         hasCheckedEmptyContentsRef.current = false;
       }
     }
@@ -131,23 +257,51 @@ const MissionScreen = () => {
     interests,
   ]);
 
-  // 화면 포커스 시 API 요청 및 스크롤 맨 위로 이동
+  // ──────────────────────────────────────────────
+  // Effect 2: 탭 포커스 시 데이터 갱신 및 스크롤 최상단 이동
+  // ──────────────────────────────────────────────
+
+  /**
+   * 미션 탭으로 전환될 때마다 실행
+   *
+   * 처리:
+   *   1. 최신 미션 및 컨텐츠 데이터 조회 (refetch)
+   *   2. 수직 스크롤을 맨 위로 이동
+   *
+   * useFocusEffect를 사용하는 이유:
+   *   - 탭 전환 시마다 실행되어야 하므로
+   *   - useEffect는 탭 전환 시 트리거되지 않음
+   */
   useFocusEffect(
     useCallback(() => {
       refetchMissions();
-      // 탭 전환 시 스크롤을 맨 위로 이동
       verticalScrollViewRef.current?.scrollTo({ y: 0, animated: false });
     }, [refetchMissions]),
   );
 
+  // ──────────────────────────────────────────────
+  // 데이터 변환 및 정렬
+  // ──────────────────────────────────────────────
+
+  /**
+   * 미션 목록 정렬
+   *
+   * 정렬 순서:
+   *   1. 진행 중 (status === '진행 중')
+   *   2. 완료 (status === '완료')
+   *   3. 잠김 (status === null)
+   *
+   * 이유:
+   *   - 사용자가 현재 진행할 수 있는 미션을 먼저 보여주기 위함
+   *   - 캐러셀에서 진행 중인 미션이 앞에 위치
+   */
   const missions = useMemo(() => {
     if (!missionData?.missions) {
       return [];
     }
 
-    // 정렬: 진행 중 -> 완료 -> 잠긴
     return [...missionData.missions].sort((a, b) => {
-      // 진행 중 (status === '진행 중') 우선
+      // 진행 중 우선
       if (a.status === '진행 중' && b.status !== '진행 중') {
         return -1;
       }
@@ -155,7 +309,7 @@ const MissionScreen = () => {
         return 1;
       }
 
-      // 완료 (status === '완료') 다음
+      // 완료 다음
       if (
         a.status === '완료' &&
         b.status !== '완료' &&
@@ -171,7 +325,7 @@ const MissionScreen = () => {
         return 1;
       }
 
-      // 잠긴 (status === null) 마지막
+      // 잠김 마지막
       if (a.status === null && b.status !== null) {
         return 1;
       }
@@ -182,13 +336,32 @@ const MissionScreen = () => {
       return 0;
     });
   }, [missionData?.missions]);
+
+  /** 추천 아티클 목록 */
   const contents = useMemo(
     () => missionData?.contents || [],
     [missionData?.contents],
   );
 
+  // ──────────────────────────────────────────────
+  // 캐러셀 Snap 위치 계산
+  // ──────────────────────────────────────────────
+
   /**
-   * 각 카드가 화면 중앙에 오기 위한 스크롤 위치(Offset) 수동 계산
+   * 각 카드가 화면 중앙에 오기 위한 스크롤 위치(Offset) 계산
+   *
+   * 계산 방식:
+   *   1. 첫 카드 위치: 0
+   *   2. 각 카드 너비 + 간격을 누적하여 다음 카드 위치 계산
+   *   3. 첫/마지막 카드는 WIDTH_EDGE, 중간 카드는 WIDTH_MID 사용
+   *
+   * 예시 (카드 3개):
+   *   - offsets[0] = 0
+   *   - offsets[1] = WIDTH_EDGE + GAP
+   *   - offsets[2] = WIDTH_EDGE + GAP + WIDTH_MID + GAP
+   *
+   * 이 오프셋들을 ScrollView의 snapToOffsets에 전달하면
+   * 각 카드가 정확히 화면 중앙에 정렬된다.
    */
   const snapOffsets = useMemo(() => {
     const offsets: number[] = [];
@@ -198,20 +371,35 @@ const MissionScreen = () => {
       const isEdge = index === 0 || index === missions.length - 1;
       const cardWidth = isEdge ? WIDTH_EDGE : WIDTH_MID;
 
-      const offset = currentPos;
-      offsets.push(offset);
-
+      offsets.push(currentPos);
       currentPos += cardWidth + GAP;
     });
+
     return offsets;
   }, [missions]);
 
-  // 스크롤 시 인덱스 업데이트
+  // ──────────────────────────────────────────────
+  // 이벤트 핸들러
+  // ──────────────────────────────────────────────
+
+  /**
+   * 캐러셀 스크롤 핸들러
+   *
+   * 현재 스크롤 위치에서 가장 가까운 오프셋의 인덱스를 찾아
+   * currentIndex를 업데이트한다.
+   *
+   * 동작 원리:
+   *   1. 현재 스크롤 위치 추출 (contentOffset.x)
+   *   2. 각 오프셋과 다음 오프셋의 중간 지점을 기준으로 판단
+   *   3. 스크롤 위치가 중간 지점을 넘으면 다음 인덱스로 전환
+   *
+   * 캐러셀 인디케이터 업데이트:
+   *   - currentIndex가 변경되면 인디케이터 점이 활성화됨
+   */
   const handleScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       const scrollPosition = event.nativeEvent.contentOffset.x;
 
-      // 현재 스크롤 위치에서 가장 가까운 오프셋의 인덱스 찾기
       const index = snapOffsets.findIndex((offset, i) => {
         const nextOffset = snapOffsets[i + 1] || Infinity;
         return scrollPosition < (offset + nextOffset) / 2;
@@ -224,25 +412,47 @@ const MissionScreen = () => {
     [snapOffsets, currentIndex],
   );
 
+  /**
+   * 알림 화면으로 이동
+   *
+   * 헤더의 알림 아이콘 클릭 시 호출
+   */
   const handleNavigateToNotification = useCallback(() => {
     navigation.navigate(RouteNames.FULL_SCREEN_STACK, {
       screen: RouteNames.CHARACTER_NOTIFICATION,
     });
   }, [navigation]);
 
-  // 안드로이드 뒤로가기 종료 처리 (화면이 포커스되어 있을 때만)
+  // ──────────────────────────────────────────────
+  // Effect 3: Android 뒤로가기 종료 처리
+  // ──────────────────────────────────────────────
+
+  /**
+   * Android에서 뒤로가기 버튼을 두 번 누르면 앱 종료
+   *
+   * 동작 원리:
+   *   1. 뒤로가기할 페이지가 있으면 기본 동작 허용 (뒤로가기)
+   *   2. 뒤로가기할 페이지가 없으면:
+   *      - 첫 번째 백키: 토스트 표시 + 타이머 시작 (2초)
+   *      - 두 번째 백키 (2초 내): 앱 종료
+   *      - 2초 경과: 타이머 리셋 (다시 첫 번째 백키로 간주)
+   *
+   * useFocusEffect를 사용하는 이유:
+   *   - 화면이 포커스되어 있을 때만 이벤트 리스너 활성화
+   *   - 다른 화면으로 이동하면 자동으로 리스너 제거
+   */
   useFocusEffect(
     useCallback(() => {
       if (Platform.OS !== 'android') {
         return;
       }
+
       const backAction = () => {
         // 뒤로가기할 페이지가 있으면 기본 동작 (뒤로가기)
         if (navigation.canGoBack()) {
-          return false; // 기본 동작 허용
+          return false;
         }
 
-        // 뒤로가기할 페이지가 없으면
         // 타이머가 있으면 (2초 내 두 번째 백키) 앱 종료
         if (backPressTimerRef.current) {
           clearTimeout(backPressTimerRef.current);
@@ -269,10 +479,13 @@ const MissionScreen = () => {
 
         return true; // 기본 동작 차단
       };
+
       const backHandler = BackHandler.addEventListener(
         'hardwareBackPress',
         backAction,
       );
+
+      // cleanup: 이벤트 리스너 및 타이머 제거
       return () => {
         backHandler.remove();
         if (backPressTimerRef.current) {
@@ -283,22 +496,119 @@ const MissionScreen = () => {
     }, [navigation, showToastModal]),
   );
 
-  // 일일 출석 체크
+  // ──────────────────────────────────────────────
+  // Effect 4: 일일 출석 체크
+  // ──────────────────────────────────────────────
+
+  /**
+   * 앱 실행 시 일일 출석 체크 및 포인트/경험치 지급
+   *
+   * 처리 흐름:
+   *   1. AsyncStorage에서 마지막 출석 날짜 조회
+   *   2. 오늘 날짜와 비교
+   *   3. 날짜가 다르면:
+   *      - 오늘 날짜 저장
+   *      - (일요일인 경우) 서버 출석 기록(GET /api/characters/me)을 조회해
+   *        월~토가 전부 출석 처리되어 있는지 확인 → 위클리 보상 지급 여부 결정
+   *      - 포인트 및 경험치 지급 (데일리, 위클리 조건 충족 시 위클리 합산)
+   *      - 출석 체크 모달 표시
+   *   4. 같으면: 아무 동작 없음
+   *
+   * 중복 체크 방지:
+   *   - hasCheckedDailyEntryRef로 한 번만 실행되도록 제어
+   *   - 화면 재진입 시에도 중복 체크하지 않음
+   *
+   * 날짜 형식:
+   *   - ISO 형식의 날짜만 비교 (YYYY-MM-DD)
+   *   - 시간은 무시 (같은 날이면 출석으로 간주)
+   */
   useEffect(() => {
     if (hasCheckedDailyEntryRef.current) {
       return;
     }
+
     const checkDailyEntry = async () => {
       try {
-        const today = new Date().toISOString().split('T')[0];
+        // 로컬(기기) 기준 "오늘" 날짜와 요일을 하나의 Date로 통일해서 계산
+        // (UTC 기준 toISOString과 로컬 기준 getDay()를 섞어 쓰면
+        //  한국시간 자정~오전 9시 사이에 하루가 어긋나는 문제가 있었음)
+        const now = new Date();
+        const today = getLocalDateKey(now); // YYYY-MM-DD (로컬 기준)
         const lastEntryDate = await AsyncStorage.getItem(
           DAILY_MISSION_ENTRY_KEY,
         );
+
         if (lastEntryDate !== today) {
+          // 오늘 처음 진입
           await AsyncStorage.setItem(DAILY_MISSION_ENTRY_KEY, today);
           hasCheckedDailyEntryRef.current = true;
-          addPoints(DAILY_ATTENDANCE_POINT);
-          addExperience(DAILY_ATTENDANCE_EXPERIENCE);
+
+          // 위클리 출석 완료 여부 판정
+          //
+          // 주의: 예전에는 "오늘이 일요일인가"만 보고 위클리 보상을 함께 지급했다.
+          // 이러면 월~토를 하나도 채우지 않은 유저(예: 가입 당일이 하필 일요일인 경우)도
+          // 위클리 보상을 받아버리는 문제가 있었다.
+          // → 일요일이면서 서버 출석 기록상 월~토가 전부 true일 때만 위클리 보상을 준다.
+          // (DAILY_MISSION_ENTRY_KEY의 하루 1회 체크는 그대로 유지되어 위클리 중복 지급도 막아준다)
+          const isSundayToday = now.getDay() === 0; // 0 = 일요일 (today와 동일한 now 기준)
+          let isWeeklyAttendanceComplete = false;
+
+          if (isSundayToday) {
+            try {
+              const { data } = await fetchCharacterMe();
+              const { monday, tuesday, wednesday, thursday, friday, saturday } =
+                data.attendance;
+              isWeeklyAttendanceComplete =
+                monday &&
+                tuesday &&
+                wednesday &&
+                thursday &&
+                friday &&
+                saturday;
+            } catch (error) {
+              // 서버 출석 기록 조회 실패 시에는 위클리 보상을 지급하지 않는
+              // 안전한 기본값(false)을 유지한다. 데일리 보상 지급 자체는 막지 않는다.
+              console.error('위클리 출석 기록 조회 실패:', error);
+            }
+          }
+
+          // 포인트 및 경험치 지급 (위클리 조건 충족 시 데일리 + 위클리 합산)
+          addPoints(
+            DAILY_ATTENDANCE_POINT +
+              (isWeeklyAttendanceComplete ? WEEKLY_ATTENDANCE_POINT : 0),
+          );
+          addExperience(
+            DAILY_ATTENDANCE_EXPERIENCE +
+              (isWeeklyAttendanceComplete ? WEEKLY_ATTENDANCE_EXPERIENCE : 0),
+          );
+
+          // 캐릭터 탭 진입 전 미리 최신 정보를 백그라운드로 받아둠
+          // (여기서 지급하는 출석 보상은 로컬 store에만 반영되고 서버 동기화가
+          //  없어서, 캐릭터 탭이 보여주는 서버 데이터가 반영될 때까지 시간차가 있음)
+          prefetchCharacterAfterReward();
+          // "받은 내역 확인하기" 화면도 같은 시점에 함께 프리페치
+          prefetchPointHistoryAfterReward();
+
+          // Mixpanel: 보상 팝업 노출 (데일리 출석)
+          trackEvent('reward_popup_view', {
+            reward_type: 'xp_point',
+            reward_source: 'daily_attendance',
+            xp_amount: DAILY_ATTENDANCE_EXPERIENCE,
+            point_amount: DAILY_ATTENDANCE_POINT,
+          });
+
+          // Mixpanel: 위클리 출석도 같은 시점에 완료되었으면 별도 이벤트로 함께 기록
+          // (팝업은 하나로 합쳐서 보여주지만, 분석 이벤트는 각 reward_source별로 남긴다)
+          if (isWeeklyAttendanceComplete) {
+            trackEvent('reward_popup_view', {
+              reward_type: 'xp_point',
+              reward_source: 'weekly_attendance',
+              xp_amount: WEEKLY_ATTENDANCE_EXPERIENCE,
+              point_amount: WEEKLY_ATTENDANCE_POINT,
+            });
+          }
+
+          // 출석 체크 모달 표시 (위클리 조건 충족 시 데일리+위클리 합산 값으로 표시)
           showModal({
             title: '포인트 & 경험치 획득!',
             image: <Modal_IMG />,
@@ -308,20 +618,28 @@ const MissionScreen = () => {
             titleDescriptionGapSize: scaleWidth(20),
             children: React.createElement(ExperienceModalContent, {
               point: true,
-              daily: true,
+              daily: true, // 일일 출석 표시
+              weekly: isWeeklyAttendanceComplete, // 일요일이면 위클리 합산 표시로 전환
             }),
             primaryButton: { title: '확인', onPress: () => {} },
           });
         } else {
+          // 오늘 이미 진입했음
           hasCheckedDailyEntryRef.current = true;
         }
       } catch (error) {
         console.error('일일 진입 체크 실패:', error);
       }
     };
+
     checkDailyEntry();
   }, [addExperience, addPoints, showModal]);
 
+  // ──────────────────────────────────────────────
+  // UI 렌더링
+  // ──────────────────────────────────────────────
+
+  // 로딩 중
   if (missionsLoading) {
     return (
       <SafeAreaView style={missionScreenStyles.container}>
@@ -332,38 +650,42 @@ const MissionScreen = () => {
     );
   }
 
-  // 미션 데이터가 없어도 레이아웃은 유지
+  // 데이터 존재 여부 확인
   const hasMissions = missions.length > 0;
   const hasContents = contents.length > 0;
 
+  // 정상 렌더링
   return (
     <SafeAreaView style={missionScreenStyles.container} edges={['top']}>
       <ScrollView
         ref={verticalScrollViewRef}
         showsVerticalScrollIndicator={false}
-        nestedScrollEnabled={true}
+        nestedScrollEnabled={true} // 중첩 스크롤 허용 (캐러셀 + 전체 스크롤)
         contentContainerStyle={missionScreenStyles.scrollContent}
       >
-        {/* 헤더 */}
+        {/* ────── 헤더 ────── */}
         <View style={missionScreenStyles.notificationButtonContainer}>
+          {/* 레이아웃 밸런스를 위한 빈 공간 */}
           <View style={missionScreenStyles.notificationButton} />
+
+          {/* 알림 버튼 */}
           <IconButton onPress={handleNavigateToNotification}>
             <AlarmIcon color={COLORS.gray800} />
           </IconButton>
         </View>
+
         <View style={missionScreenStyles.header}>
           <View style={missionScreenStyles.headerLeft}>
             <Text style={missionScreenStyles.headerTitle}>오늘의 미션</Text>
             <Text style={missionScreenStyles.headerDescription}>
-              오늘의 미션을 통해 새로운 지식을 탐험하고{'\n'}문해력을
-              키워보세요!
+              오늘의 미션으로 부담 없이 첫 읽기를 시작해보세요.
             </Text>
           </View>
         </View>
 
-        <Spacer num={38} />
+        <Spacer num={24} />
 
-        {/* 미션 진행 카드 캐러셀 (무한스크롤 제거 버전) */}
+        {/* ────── 미션 캐러셀 ────── */}
         {hasMissions ? (
           <>
             <View>
@@ -373,13 +695,13 @@ const MissionScreen = () => {
                 showsHorizontalScrollIndicator={false}
                 onScroll={handleScroll}
                 scrollEventThrottle={SCROLL_EVENT_THROTTLE}
-                decelerationRate="fast"
-                snapToOffsets={snapOffsets}
-                snapToAlignment="start"
-                disableIntervalMomentum={true}
+                decelerationRate="fast" // 빠른 감속 (Snap 효과 향상)
+                snapToOffsets={snapOffsets} // 각 카드 위치에 Snap
+                snapToAlignment="start" // 왼쪽 정렬 기준 Snap
+                disableIntervalMomentum={true} // 스크롤 중 Snap 비활성화
                 nestedScrollEnabled={true}
                 contentContainerStyle={{
-                  paddingHorizontal: SIDE_SPACING,
+                  paddingHorizontal: SIDE_SPACING, // 첫 카드 중앙 정렬용 패딩
                 }}
               >
                 {missions.map((mission, index) => {
@@ -402,7 +724,7 @@ const MissionScreen = () => {
 
             <Spacer num={21} />
 
-            {/* 캐러셀 인디케이터 */}
+            {/* 캐러셀 인디케이터 (점) */}
             <View style={missionScreenStyles.carouselIndicators}>
               {missions.map((_, index) => (
                 <View
@@ -417,8 +739,8 @@ const MissionScreen = () => {
             </View>
           </>
         ) : (
+          // 미션 데이터가 없을 때
           <>
-            {/* 미션 데이터가 없을 때 placeholder */}
             <View style={missionScreenStyles.emptyMissionContainer}>
               <Text style={missionScreenStyles.emptyText}>
                 오늘의 미션이 없습니다
@@ -430,7 +752,7 @@ const MissionScreen = () => {
 
         <Spacer num={47} />
 
-        {/* 아티클 리스트 */}
+        {/* ────── 추천 아티클 목록 ────── */}
         <View style={missionScreenStyles.articleList}>
           {hasContents ? (
             contents.map((content, index) => {
@@ -441,7 +763,13 @@ const MissionScreen = () => {
                   key={article.id}
                   article={article}
                   onPress={() => {
-                    handleArticlePress(article.contentId);
+                    handleArticlePress(
+                      article.contentId,
+                      undefined,
+                      article.category,
+                    );
+
+                    // analytics 이벤트 로그 (처음 9개 카드만)
                     if (index < 9) {
                       logEvent(`Card0${index + 1}_Home`);
                     }
@@ -450,6 +778,7 @@ const MissionScreen = () => {
               );
             })
           ) : (
+            // 아티클 데이터가 없을 때
             <View style={missionScreenStyles.emptyContentContainer}>
               <Text style={missionScreenStyles.emptyText}>
                 추천 아티클이 없습니다
@@ -486,6 +815,7 @@ export const missionScreenStyles = StyleSheet.create({
     flex: 1,
     paddingRight: scaleWidth(12),
   },
+  /** 레이아웃 밸런스를 위한 빈 공간 (알림 버튼과 대칭) */
   notificationButton: {
     width: scaleWidth(112),
     height: scaleWidth(52),
@@ -499,18 +829,21 @@ export const missionScreenStyles = StyleSheet.create({
     ...Body_16M,
     color: COLORS.gray600,
   },
+  /** 캐러셀 인디케이터 컨테이너 */
   carouselIndicators: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
     gap: scaleWidth(8),
   },
+  /** 인디케이터 점 (비활성) */
   indicatorDot: {
     width: scaleWidth(8),
     height: scaleWidth(8),
     backgroundColor: COLORS.gray300,
     borderRadius: BORDER_RADIUS[99],
   },
+  /** 인디케이터 점 (활성) */
   indicatorDotActive: {
     backgroundColor: COLORS.puple.main,
     width: scaleWidth(12),

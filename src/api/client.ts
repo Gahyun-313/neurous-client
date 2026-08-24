@@ -1,3 +1,21 @@
+/**
+ * Axios 공용 HTTP 클라이언트 (client.ts)
+ *
+ * 앱 전체에서 사용하는 Axios 인스턴스.
+ * 모든 API 파일은 이 client를 import해 사용한다.
+ *
+ * 주요 기능:
+ *   - baseURL 환경 분기 (개발 / 프로덕션)
+ *   - Request Interceptor  : Authorization 헤더 자동 첨부
+ *   - Response Interceptor : 401/403 → refreshToken 재발급 → 원래 요청 재시도
+ *
+ * 동시 401 처리:
+ *   콜드 스타트 시 TanStack Query가 여러 API를 동시에 발사하면
+ *   모두 401을 받을 수 있다. 이때 첫 번째 요청만 재발급을 시도하고
+ *   나머지는 refreshSubscribers 큐에서 대기한다.
+ *   재발급 성공 → 큐 전체에 새 토큰 전달 후 재시도
+ *   재발급 실패 → 큐 전체 reject 후 로그아웃 처리
+ */
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import {
   getAuthToken,
@@ -8,39 +26,98 @@ import {
 import { refreshToken } from './authApi';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useOnboardingStore } from '../store/onboardingStore';
-import { IS_PRODUCTION } from '../config/adConfig';
+import { IS_PRODUCTION } from '../config/env';
 import { DEV_URL, PROD_URL } from '../config/api';
+import {
+  showNetworkErrorToast,
+  showGeneralErrorToast,
+} from '../utils/errorToast';
+
+// ─────────────────────────────────────────────────────────────
+// Axios 인스턴스
+// ─────────────────────────────────────────────────────────────
 
 const client = axios.create({
   baseURL: IS_PRODUCTION ? PROD_URL : DEV_URL,
-  timeout: 10000, // 10초 타임아웃 (네트워크가 느릴 때 무한 대기 방지)
-  headers: {
-    'Content-Type': 'application/json',
-  },
+  timeout: 10000,
+  headers: { 'Content-Type': 'application/json' },
 });
 console.log('baseURL:', client.defaults.baseURL);
 console.log('IS_PRODUCTION:', IS_PRODUCTION);
-// 토큰 재발급 중인지 확인하는 플래그 (무한 루프 방지)
+
+// ─────────────────────────────────────────────────────────────
+// 토큰 재발급 상태 관리
+// ─────────────────────────────────────────────────────────────
+
+/** 재발급 진행 중 플래그 — true이면 후속 401은 큐에 대기 */
 let isRefreshing = false;
 
-// 3. 요청 인터셉터 (Request Interceptor)
-// 요청을 보내기 직전에 실행됩니다. (주로 토큰 넣을 때 사용)
+/** 재발급 대기 큐 — 재발급 완료 후 일괄 resolve/reject */
+let refreshSubscribers: {
+  resolve: (token: string) => void;
+  reject: (error: any) => void;
+}[] = [];
+
+/** 재발급 성공 시 큐의 모든 요청에 새 토큰 전달 */
+const onRefreshSuccess = (newToken: string) => {
+  refreshSubscribers.forEach(({ resolve }) => resolve(newToken));
+  refreshSubscribers = [];
+};
+
+/** 재발급 실패 시 큐의 모든 요청을 reject */
+const onRefreshFailure = (error: any) => {
+  refreshSubscribers.forEach(({ reject }) => reject(error));
+  refreshSubscribers = [];
+};
+
+// ─────────────────────────────────────────────────────────────
+// 헬퍼
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * 인증 데이터 삭제 + 로그인 화면 이동 트리거
+ *
+ * refreshToken 만료 또는 재발급 실패 시 호출한다.
+ * AsyncStorage 토큰 삭제 → 온보딩 리셋 → RootNavigator가 감지하여 로그인 화면 전환
+ */
+const clearAuthAndRedirect = async () => {
+  await AsyncStorage.multiRemove([
+    '@auth_token',
+    '@refresh_token',
+    '@user_info',
+  ]);
+  await AsyncStorage.setItem('@onboarding_completed', 'false');
+  await AsyncStorage.setItem('@onboarding_step', 'login');
+  useOnboardingStore.getState().resetOnboarding();
+};
+
+// ─────────────────────────────────────────────────────────────
+// Request Interceptor
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * 요청 직전 Authorization 헤더를 자동 첨부한다.
+ *
+ * 예외 (헤더 제거):
+ *   - /api/auth/refresh : 만료된 accessToken이 딸려가면 서버 검증 실패
+ *   - /api/auth/login/  : 탈퇴 후 재가입 시 이전 토큰이 남아 서버 500 유발
+ */
 client.interceptors.request.use(
   async config => {
-    // refresh API 호출 시에는 Authorization 헤더를 제거
-    if (config.url?.includes('/api/auth/refresh')) {
+    if (
+      config.url?.includes('/api/auth/refresh') ||
+      config.url?.includes('/api/auth/login/')
+    ) {
       if (config.headers) {
         delete config.headers.Authorization;
       }
     } else {
-      // AsyncStorage에서 토큰을 가져와서 헤더에 추가
       const token = await getAuthToken();
       if (token && config.headers) {
         config.headers.Authorization = `Bearer ${token}`;
       }
     }
 
-    // 개발 모드에서 요청 로깅
     if (__DEV__) {
       const fullUrl = `${config.baseURL}${config.url}`;
       console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -57,7 +134,6 @@ client.interceptors.request.use(
     return config;
   },
   error => {
-    // 개발 모드에서 요청 에러 로깅
     if (__DEV__) {
       console.error('[API 요청 에러]:', error);
     }
@@ -65,10 +141,33 @@ client.interceptors.request.use(
   },
 );
 
-// 4. 응답 인터셉터 (Response Interceptor)
+// ─────────────────────────────────────────────────────────────
+// Network Error 판별
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * 서버 응답을 아예 못 받은 요청인지 판별한다.
+ * (4xx/5xx처럼 서버가 응답한 에러와 구분해 네트워크 에러 토스트 문구를 고를 때 사용)
+ *
+ * 과거에는 이 경우 최대 2회까지 자동 재시도했으나, 재시도 중 사용자가
+ * 아무 피드백도 못 받는 대기 시간이 생기는 문제로 재시도 없이 바로
+ * 실패 처리하고 공통 에러 토스트를 띄우는 방식으로 변경했다.
+ */
+const isNoResponseError = (error: AxiosError) => !error.response;
+
+// ─────────────────────────────────────────────────────────────
+// Response Interceptor
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * 401/403 응답 시 accessToken 재발급을 시도한다.
+ *
+ * 무한루프 방지:
+ *   - _retry 플래그 : 같은 요청이 두 번 재시도되지 않도록 차단
+ *   - isRefreshing  : 동시 401 시 첫 요청만 재발급, 나머지는 큐 대기
+ */
 client.interceptors.response.use(
   response => {
-    // 개발 모드에서 응답 로깅
     if (__DEV__) {
       const fullUrl = `${response.config.baseURL}${response.config.url}`;
       console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -82,69 +181,63 @@ client.interceptors.response.use(
   },
   async (error: AxiosError) => {
     const originalRequest = error.config as
-      | (InternalAxiosRequestConfig & {
-          _retry?: boolean;
-        })
+      | (InternalAxiosRequestConfig & { _retry?: boolean })
       | undefined;
 
-    // 401/403 에러 발생 시 토큰 재발급 시도
+    // ── 401 / 403 처리 ───────────────────────────────────────
     if (
       (error.response?.status === 401 || error.response?.status === 403) &&
       originalRequest &&
       !originalRequest._retry
     ) {
-      // 토큰 재발급 API 자체가 401/403을 반환하면 무한 루프 방지
+      // refresh 엔드포인트 자체가 실패 → refreshToken도 만료 → 즉시 로그아웃
       if (originalRequest.url?.includes('/api/auth/refresh')) {
-        // 재발급 API 자체가 실패하면 토큰 삭제 및 온보딩 상태 초기화
-        await AsyncStorage.multiRemove([
-          '@auth_token',
-          '@refresh_token',
-          '@user_info',
-        ]);
-        // 온보딩 상태 초기화 (로그인 화면으로 이동하기 위해)
-        await AsyncStorage.setItem('@onboarding_completed', 'false');
-        await AsyncStorage.setItem('@onboarding_step', 'login');
-        // Zustand store도 업데이트하여 RootNavigator가 감지하도록 함
-        useOnboardingStore.getState().resetOnboarding();
-
+        await clearAuthAndRedirect();
         return Promise.reject(error);
       }
 
-      // 이미 재발급 중이면 에러 반환 (동시 요청은 각자 처리)
+      // 이미 재발급 진행 중 → 큐에 대기하고 새 토큰 받으면 재시도
       if (isRefreshing) {
-        return Promise.reject(error);
+        return new Promise((resolve, reject) => {
+          refreshSubscribers.push({
+            resolve: (newToken: string) => {
+              originalRequest._retry = true;
+              if (originalRequest.headers) {
+                originalRequest.headers.Authorization = `Bearer ${newToken}`;
+              }
+              resolve(client(originalRequest));
+            },
+            reject: (err: any) => {
+              reject(err);
+            },
+          });
+        });
       }
 
+      // 첫 번째 401 요청 → 재발급 시도
       originalRequest._retry = true;
       isRefreshing = true;
 
       try {
         const refreshTokenValue = await getRefreshToken();
+
         if (!refreshTokenValue) {
           isRefreshing = false;
-          // 리프레시 토큰이 없으면 로그아웃 처리
-          await AsyncStorage.multiRemove([
-            '@auth_token',
-            '@refresh_token',
-            '@user_info',
-          ]);
-          await AsyncStorage.setItem('@onboarding_completed', 'false');
-          await AsyncStorage.setItem('@onboarding_step', 'login');
-          useOnboardingStore.getState().resetOnboarding();
+          onRefreshFailure(error);
+          await clearAuthAndRedirect();
           return Promise.reject(error);
         }
 
-        // 토큰 재발급 API 호출
         const refreshResponse = await refreshToken(refreshTokenValue);
-        // data 래퍼가 있으면 data에서, 없으면 직접 접근 (하위 호환성)
+
+        // 서버 응답 구조 두 가지 대응 (data 래퍼 / 직접 반환)
         const newAccessToken =
           refreshResponse.data?.accessToken || refreshResponse.accessToken;
 
         if (!newAccessToken) {
-          throw new Error('토큰 재발급 응답에 accessToken이 없습니다');
+          throw new Error('토큰 재발급 응답에 accessToken이 없음');
         }
 
-        // 새 토큰 저장
         await saveAuthToken(newAccessToken);
         const newRefreshToken =
           refreshResponse.data?.refreshToken || refreshResponse.refreshToken;
@@ -152,31 +245,26 @@ client.interceptors.response.use(
           await saveRefreshToken(newRefreshToken);
         }
 
-        // 재발급 성공 시 원래 요청 재시도
+        // 재발급 성공 → 큐의 모든 대기 요청에 새 토큰 전달
         isRefreshing = false;
+        onRefreshSuccess(newAccessToken);
+
+        // 원래 요청도 새 토큰으로 재시도
         if (originalRequest.headers) {
           originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
         }
         return client(originalRequest);
       } catch (refreshError: any) {
         isRefreshing = false;
+        onRefreshFailure(refreshError);
 
-        // 재발급 실패 시 토큰 삭제 및 온보딩 상태 초기화
+        // 서버가 명확히 401/403을 응답한 경우만 로그아웃 처리
+        // Network Error(!refreshError.response)는 일시적 네트워크 문제이므로 로그아웃하지 않음
         if (
           refreshError.response?.status === 401 ||
-          refreshError.response?.status === 403 ||
-          !refreshError.response // 네트워크 에러 등
+          refreshError.response?.status === 403
         ) {
-          await AsyncStorage.multiRemove([
-            '@auth_token',
-            '@refresh_token',
-            '@user_info',
-          ]);
-          // 온보딩 상태 초기화 (로그인 화면으로 이동하기 위해)
-          await AsyncStorage.setItem('@onboarding_completed', 'false');
-          await AsyncStorage.setItem('@onboarding_step', 'login');
-          // Zustand store도 업데이트하여 RootNavigator가 감지하도록 함
-          useOnboardingStore.getState().resetOnboarding();
+          await clearAuthAndRedirect();
         }
 
         if (refreshError.response?.status === 500) {
@@ -187,7 +275,20 @@ client.interceptors.response.use(
       }
     }
 
-    // 개발 모드에서 에러 응답 로깅
+    // ── 그 외 에러 → 공통 에러 토스트 ─────────────────────────
+    // 여기까지 내려오는 에러는 (1) 서버 응답 자체를 못 받았거나(네트워크
+    // 에러 — 재시도 없이 바로 실패 처리) (2) 401/403이 아닌 그 외 상태
+    // 코드(400/404/409/500 등)로 처리가 끝난 경우다. 로그인/재발급
+    // 요청도 예외 없이 포함한다 — 화면
+    // 자체에 Alert 등 추가 UI가 있더라도, 실제 사용자에게 최소한의
+    // 공통 피드백(토스트)이 항상 보이도록 보장하기 위함이다.
+    // (예: 소셜 로그인 API가 500을 반환해도 토스트가 떠야 함)
+    if (isNoResponseError(error)) {
+      showNetworkErrorToast(); // A. 네트워크 오류
+    } else {
+      showGeneralErrorToast(); // B. 일반 오류 (원인 특정이 어려운 나머지 실패)
+    }
+
     if (__DEV__) {
       const fullUrl = originalRequest
         ? `${originalRequest.baseURL}${originalRequest.url}`

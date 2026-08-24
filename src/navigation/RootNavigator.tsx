@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useCallback } from 'react';
 import {
   NavigationContainer,
   CommonActions,
@@ -26,7 +26,6 @@ import ToastModal from '../components/ToastModal';
 
 import { useExperienceStore } from '../store/experienceStore';
 import { characterKeys } from '../hooks/useCharacter';
-import { missionKeys } from '../hooks/useMissions';
 import { LevelUpModalContent } from '../components/ArticlePointModalContent';
 import { useQueryClient } from '@tanstack/react-query';
 import { Heading_24EB_Round } from '../styles/typography';
@@ -36,6 +35,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LevelUpInfo } from '../api/missionApi';
 import { logScreenView } from '../services/analyticsService';
 import { isScreenMapped } from '../services/analyticsService';
+import { trackEvent } from '../services/mixpanelService';
 
 const Stack = createNativeStackNavigator();
 
@@ -83,8 +83,8 @@ const RootNavigatorContent: React.FC<{
             routes: [{ name: RouteNames.MAIN_TAB }],
           }),
         );
-        // 온보딩 완료 후 미션 쿼리 무효화하여 자동으로 refetch되도록 함
-        queryClient.invalidateQueries({ queryKey: missionKeys.lists() });
+        // useMissions가 refetchOnMount: true라 MissionScreen 마운트 시 자동 refetch됨
+        // (중복 invalidateQueries 호출 시 마운트 시점과 겹쳐 요청이 겹치는 레이스 발생 가능하여 제거)
       } else if (!isOnboardingCompleted && prevOnboardingCompletedRef.current) {
         // 온보딩 미완료로 변경됨 (401 에러 등) → 로그인 화면으로 이동
         navigationRef.current.dispatch(
@@ -102,94 +102,110 @@ const RootNavigatorContent: React.FC<{
     prevOnboardingCompletedRef.current = isOnboardingCompleted;
   }, [isOnboardingCompleted, navigationRef, isReady, queryClient]);
 
-  // 경험치 변경 시 characterData refetch
+  // 두 useEffect에서 공유하기 위해 useCallback으로 선언
+  const checkPendingLevelUp = useCallback(async () => {
+    if (hasCheckedPendingLevelUpRef.current) {
+      return;
+    }
+
+    try {
+      const pendingLevelUpData =
+        await AsyncStorage.getItem('@pending_level_up');
+
+      if (pendingLevelUpData) {
+        try {
+          const levelUpInfo: LevelUpInfo = JSON.parse(pendingLevelUpData);
+
+          if (!levelUpInfo || typeof levelUpInfo !== 'object') {
+            console.warn(
+              '[RootNavigator] 레벨업 정보 형식이 올바르지 않습니다:',
+              levelUpInfo,
+            );
+            await AsyncStorage.removeItem('@pending_level_up');
+            return;
+          }
+
+          hasCheckedPendingLevelUpRef.current = true;
+
+          // "LEVEL_2" 형식에서 숫자 추출 (Mixpanel 이벤트 및 모달 표시에 공용)
+          const levelUpMatch = levelUpInfo.levelCode?.match(/LEVEL_(\d+)/);
+          const levelAfter = levelUpMatch ? parseInt(levelUpMatch[1], 10) : 0;
+
+          // Mixpanel: 레벨업 팝업 노출
+          trackEvent('level_up_popup_view', {
+            level_before: levelAfter > 0 ? levelAfter - 1 : null,
+            level_after: levelAfter > 0 ? levelAfter : null,
+          });
+
+          // 레벨업 모달 표시
+          showModal({
+            title: levelUpInfo.title || '축하해요! 레벨 업!',
+            image: <Modal_IMG />,
+            imageTopOffset: scaleWidth(-100.62),
+            imagePaddingTop: scaleWidth(64),
+            titleStyle: { ...Heading_24EB_Round },
+            titleDescriptionGapSize: 4,
+            description:
+              levelUpInfo.message || '조금씩 생각이 자라나고 있어요.',
+            descriptionColor: COLORS.gray700,
+            children: React.createElement(LevelUpModalContent, {
+              newLevel: levelAfter,
+            }),
+            primaryButton: {
+              title: '확인',
+              onPress: async () => {
+                // Mixpanel: 레벨업 팝업 확인 버튼 클릭
+                trackEvent('level_up_popup_confirm', {
+                  level_before: levelAfter > 0 ? levelAfter - 1 : null,
+                  level_after: levelAfter > 0 ? levelAfter : null,
+                });
+
+                // 레벨업 정보 삭제
+                await AsyncStorage.removeItem('@pending_level_up');
+                hasCheckedPendingLevelUpRef.current = false;
+              },
+            },
+          });
+        } catch (parseError) {
+          console.error('[RootNavigator] 레벨업 정보 파싱 실패:', parseError);
+          // 잘못된 데이터 삭제
+          await AsyncStorage.removeItem('@pending_level_up');
+        }
+      }
+    } catch (error) {
+      console.error('[RootNavigator] 레벨업 체크 실패:', error);
+    }
+  }, [showModal]);
+
+  // 앱 진입 시 미처리 레벨업 정보 체크
   useEffect(() => {
     if (!isOnboardingCompleted) {
       return;
     }
-    // 경험치가 변경되면 characterData를 refetch하여 최신 레벨 정보 가져오기
+
+    checkPendingLevelUp();
+  }, [isOnboardingCompleted, checkPendingLevelUp]);
+
+  // 경험치 변경 시 characterData refetch + 레벨업 체크
+  useEffect(() => {
+    if (!isOnboardingCompleted) {
+      return;
+    }
+
     const previousExp = lastCheckedExpRef.current;
     if (experience !== previousExp && experience > previousExp) {
       // 경험치가 증가했을 때만 refetch
-      queryClient.invalidateQueries({ queryKey: characterKeys.data() });
-      // 경험치가 증가했을 때 레벨업 체크도 다시 수행
+      // characterKeys.all로 무효화해야 레벨/경험치 정보(data)뿐 아니라
+      // 출석·진행률 바가 참조하는 characterKeys.me() 캐시도 함께 갱신된다.
+      // (data()만 무효화하면 me()는 캐릭터 탭의 focus refetch에만 의존하게 되어
+      //  탭 재진입 없이는 출석/진행률이 최신 상태로 반영되지 않는 문제가 있었음)
+      queryClient.invalidateQueries({ queryKey: characterKeys.all });
+      // ref 리셋 직접 호출 - useEffect 의존성 재실행 없이도 즉시 체크
       hasCheckedPendingLevelUpRef.current = false;
+      checkPendingLevelUp();
     }
     lastCheckedExpRef.current = experience;
-  }, [experience, isOnboardingCompleted, queryClient]);
-
-  // 완독 체크 API 응답의 레벨업 정보 체크
-  useEffect(() => {
-    if (!isOnboardingCompleted) {
-      return;
-    }
-
-    const checkPendingLevelUp = async () => {
-      if (hasCheckedPendingLevelUpRef.current) {
-        return;
-      }
-
-      try {
-        const pendingLevelUpData = await AsyncStorage.getItem(
-          '@pending_level_up',
-        );
-
-        if (pendingLevelUpData) {
-          try {
-            const levelUpInfo: LevelUpInfo = JSON.parse(pendingLevelUpData);
-
-            // levelUpInfo가 유효한지 확인
-            if (!levelUpInfo || typeof levelUpInfo !== 'object') {
-              console.warn(
-                '[RootNavigator] 레벨업 정보 형식이 올바르지 않습니다:',
-                levelUpInfo,
-              );
-              await AsyncStorage.removeItem('@pending_level_up');
-              return;
-            }
-
-            hasCheckedPendingLevelUpRef.current = true;
-
-            // 레벨업 모달 표시
-            showModal({
-              title: levelUpInfo.title || '축하해요! 레벨 업!',
-              image: <Modal_IMG />,
-              imageTopOffset: scaleWidth(-100.62),
-              imagePaddingTop: scaleWidth(64),
-              titleStyle: { ...Heading_24EB_Round },
-              titleDescriptionGapSize: 4,
-              description:
-                levelUpInfo.message || '조금씩 생각이 자라나고 있어요.',
-              descriptionColor: COLORS.gray700,
-              children: React.createElement(LevelUpModalContent, {
-                newLevel: (() => {
-                  // "LEVEL_2" 형식에서 숫자 추출
-                  const match = levelUpInfo.levelCode?.match(/LEVEL_(\d+)/);
-                  return match ? parseInt(match[1], 10) : 0;
-                })(),
-              }),
-              primaryButton: {
-                title: '확인',
-                onPress: async () => {
-                  // 레벨업 정보 삭제
-                  await AsyncStorage.removeItem('@pending_level_up');
-                  hasCheckedPendingLevelUpRef.current = false;
-                },
-              },
-            });
-          } catch (parseError) {
-            console.error('[RootNavigator] 레벨업 정보 파싱 실패:', parseError);
-            // 잘못된 데이터 삭제
-            await AsyncStorage.removeItem('@pending_level_up');
-          }
-        }
-      } catch (error) {
-        console.error('[RootNavigator] 레벨업 체크 실패:', error);
-      }
-    };
-
-    checkPendingLevelUp();
-  }, [isOnboardingCompleted, showModal]);
+  }, [experience, isOnboardingCompleted, queryClient, checkPendingLevelUp]);
 
   return (
     <>
@@ -285,12 +301,20 @@ const RootNavigatorContent: React.FC<{
         <ToastModal
           visible={modalState.visible}
           message={modalState.message}
+          icon={modalState.icon}
           duration={modalState.duration}
           position={modalState.position}
           backgroundColor={modalState.backgroundColor}
           height={modalState.height}
           width={modalState.width}
+          marginHorizontal={modalState.marginHorizontal}
           borderRadius={modalState.borderRadius}
+          borderColor={modalState.borderColor}
+          borderWidth={modalState.borderWidth}
+          paddingHorizontal={modalState.paddingHorizontal}
+          paddingVertical={modalState.paddingVertical}
+          messageStyle={modalState.messageStyle}
+          bottomOffset={modalState.bottomOffset}
           onClose={() => {
             modalState.onClose?.();
             hideModal();
