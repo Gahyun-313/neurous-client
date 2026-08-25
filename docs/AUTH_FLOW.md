@@ -1,184 +1,286 @@
-# 인증 플로우
+# 🔐 Authentication Flow
 
-## 개요
+## 🔑 로그인 구조
 
-뉴로스는 4종 소셜 로그인(Kakao / Naver / Google / Apple)을 지원하며, Firebase Auth를 거쳐 자체 Backend에서 JWT를 발급받는 구조입니다.
+NEUROUS는 Google, Kakao, Naver와 Apple 로그인을 제공합니다. 제공자별 SDK 응답을 공통 결과 형태로 변환한 뒤 Backend 로그인 API에서 서비스 JWT를 발급받습니다.
+
+Apple 로그인은 서비스에 포함되지만 본인의 주요 구현 범위에는 포함하지 않습니다.
 
 ```mermaid
-flowchart LR
-    Social["소셜 SDK<br/>(Kakao·Naver·Google·Apple)"]
-    Firebase["Firebase Auth<br/>(Google·Apple만)"]
-    Backend["Backend API<br/>JWT 발급"]
-    Storage["AsyncStorage<br/>토큰 저장"]
+sequenceDiagram
+    actor User
+    participant Screen as LoginScreen
+    participant Social as socialLoginService
+    participant Provider as Social SDK / Firebase Auth
+    participant API as authApi
+    participant Backend
+    participant Storage as AsyncStorage
 
-    Social --> Firebase --> Backend --> Storage
-    Social -- "Kakao·Naver<br/>(Firebase 우회)" --> Backend
+    User->>Screen: 소셜 로그인 선택
+    Screen->>Social: 제공자 로그인 요청
+    Social->>Provider: SDK 인증
+    Provider-->>Social: Provider Token
+    Social->>API: loginWithProvider
+    API->>Backend: POST /api/auth/login/{provider}
+    Backend-->>API: Access Token + Refresh Token + newUser
+    API-->>Social: LoginResponse
+    Social->>Storage: Token과 사용자 정보 저장
+    alt 기존 사용자
+        Social-->>Screen: Main 이동
+    else 신규 사용자
+        Social-->>Screen: 약관·온보딩 이동
+    end
 ```
-
-<br />
-
-## 소셜 로그인 통합 아키텍처
 
 ### 제공자별 인증 방식
 
-| 제공자 | 경로 | Firebase Auth 사용 |
+| Provider | Authentication Path | Firebase Auth |
 | --- | --- | --- |
-| **Google** | Google Sign-In SDK → Firebase Auth → Backend | ✅ |
-| **Apple** | Apple Authentication → Firebase Auth → Backend | ✅ |
-| **Kakao** | Kakao SDK → Backend 직접 | ❌ (우회) |
-| **Naver** | Naver SDK → Backend 직접 | ❌ (우회) |
+| Google | Google Sign-In SDK → Firebase Auth → Backend | 사용 |
+| Apple* | Apple Authentication → Firebase Auth → Backend | 사용 |
+| Kakao | Kakao SDK → Backend 직접 전달 | 우회 |
+| Naver | Naver SDK → Backend 직접 전달 | 우회 |
+
+\* Apple 로그인은 다른 팀원이 구현했으며, 공통 로그인 구조에 포함된 서비스 동작을 기준으로 설명합니다.
+
+Google과 Apple은 Firebase Credential을 생성해 인증한 뒤 Backend에서 서비스 JWT를 발급받습니다. Kakao와 Naver는 Firebase Auth를 거치지 않고 각 SDK에서 받은 Token을 Backend로 직접 전달합니다.
+
+```mermaid
+flowchart LR
+    User([사용자]) --> Provider{로그인 제공자}
+    Provider -- Google --> Google[Google Sign-In SDK]
+    Provider -- Apple --> Apple[Apple Authentication]
+    Provider -- Kakao --> Kakao[Kakao SDK]
+    Provider -- Naver --> Naver[Naver SDK]
+    Google --> Firebase[Firebase Auth]
+    Apple --> Firebase
+    Firebase --> Backend[Backend Social Login API]
+    Kakao --> Backend
+    Naver --> Backend
+    Backend --> JWT[서비스 JWT 발급]
+    JWT --> Storage[AsyncStorage 저장]
+```
 
 ### SocialLoginResult 공통 인터페이스
 
-제공자별 SDK 응답 형태가 달라 화면에서 분기가 복잡해지는 문제를, `SocialLoginResult` 인터페이스로 추상화하고 `socialLoginService` 단일 모듈로 통합했습니다.
+제공자마다 SDK 응답 형태와 Token 종류가 달라 화면에서 직접 분기하면 로그인 화면이 각 SDK 구현에 강하게 결합됩니다. 이를 `SocialLoginResult` 형태로 통합하고 `socialLoginService`가 제공자별 차이를 처리하도록 분리했습니다.
 
+```mermaid
+flowchart TD
+    Screen[LoginScreen] --> Service["socialLoginService.login(provider)"]
+    Service --> SDK[제공자별 SDK 인증]
+    SDK --> Result["SocialLoginResult<br/>token · provider · 사용자 정보"]
+    Result --> API[authApi.loginWithProvider]
+    API --> Backend[Backend 인증 API]
+    Backend --> Save[authStorageService 저장]
+    Save --> Screen
 ```
-LoginScreen → socialLoginService.login(provider)
-                    ↓
-              SocialLoginResult { token, provider, ... }
-                    ↓
-              authApi.loginWithProvider(result)
-                    ↓
-              AsyncStorage 토큰 저장
-```
 
-### 주요 파일
+### 인증 모듈의 책임
 
-- `services/socialLoginService.ts` — 제공자별 SDK 호출 통합, 공통 인터페이스 반환
-- `services/authService.ts` — 로그인/로그아웃 오케스트레이션
-- `services/authStorageService.ts` — AsyncStorage 토큰 CRUD
-- `api/authApi.ts` — Backend 인증 API 호출
+| Module | Responsibility |
+| --- | --- |
+| `socialLoginService.ts` | 제공자별 SDK 호출과 공통 로그인 결과 생성 |
+| `authService.ts` | 로그인·로그아웃·회원탈퇴 흐름 조합 |
+| `authStorageService.ts` | AsyncStorage 인증 정보 저장·조회·삭제 |
+| `authApi.ts` | Backend 인증 API 요청과 응답 타입 정의 |
+| `client.ts` | JWT 첨부, 갱신, Queue와 공통 오류 처리 |
 
-<br />
+## 🎫 JWT Token 관리
 
-## Firebase Auth 연동
+### 저장 구조
 
-Google/Apple 로그인은 Firebase Auth를 거쳐 nonce 검증 및 토큰 표준화를 처리합니다.
-
-- Google: 직접 구현한 `@react-native-google-signin/google-signin` 기반 로그인 흐름에서 Firebase credential 생성
-- Apple: 팀원이 구현한 `@invertase/react-native-apple-authentication` SDK 연동을 공통 `SocialLoginResult` 구조에 통합
-
-Kakao/Naver는 Firebase Auth를 거치지 않고 소셜 SDK에서 받은 토큰을 Backend에 직접 전달합니다.
-
-<br />
-
-## JWT 토큰 관리
-
-### 저장 구조 (AsyncStorage)
-
-| 키 | 값 |
+| AsyncStorage Key | Value |
 | --- | --- |
 | `@auth_token` | Access Token (JWT) |
 | `@refresh_token` | Refresh Token |
-| `@user_info` | 유저 정보 JSON |
+| `@user_info` | 사용자 정보 JSON |
 
-### 토큰 생명주기
+### Token 생명주기
 
-1. **발급**: `POST /api/auth/login/{provider}` 응답에서 access + refresh 토큰 수신
-2. **저장**: `authStorageService`가 AsyncStorage에 영구 저장
-3. **사용**: Axios 인터셉터가 매 요청 헤더에 자동 첨부
-4. **갱신**: 401/403 응답 시 인터셉터가 `POST /api/auth/refresh`로 자동 재발급 (동시에 여러 요청이 401을 받아도 재발급은 1회만 실행 — 아래 "동시 401 처리" 참고)
-5. **삭제**: 로그아웃 또는 재발급 실패 시 `AsyncStorage.multiRemove`
+```mermaid
+flowchart LR
+    Issue[Backend 로그인 성공] --> Receive[Access · Refresh Token 수신]
+    Receive --> Save[AsyncStorage 저장]
+    Save --> Attach[일반 API에 Access Token 첨부]
+    Attach --> Expired{401/403 발생?}
+    Expired -- No --> Continue[응답 처리]
+    Expired -- Yes --> Refresh[Refresh API]
+    Refresh --> Result{갱신 성공?}
+    Result -- Yes --> Replace[새 Access Token 저장]
+    Replace --> Retry[원 요청 재시도]
+    Result -- No --> Remove[Token · 사용자 정보 삭제]
+    Logout[로그아웃 · 회원탈퇴] --> Remove
+```
 
-<br />
+## 🔀 신규·기존 사용자 분기
 
-## Axios Interceptor (client.ts)
+초기에는 로그인 전에 약관 화면으로 이동해 기존 사용자도 매번 약관을 확인해야 했습니다. 로그인 응답의 `newUser`를 먼저 확인하도록 순서를 바꿨습니다.
 
-### Request Interceptor
+- 기존 사용자: 바로 Main으로 이동
+- 신규 사용자: 약관과 온보딩 진행
+- 신규 사용자가 약관 동의 전에 이탈: 인증 상태 정리를 위해 자동 로그아웃
 
-- 모든 요청에 `Authorization: Bearer <token>` 헤더 자동 추가
-- **예외 경로** (헤더 제외):
-  - `/api/auth/login/` — 소셜 로그인 공개 API
-  - `/api/auth/refresh` — 토큰 재발급 API
-- 요청 로깅 (개발 모드)
+`newUser === false`인 경우만 기존 사용자로 처리합니다. 응답에서 값이 누락되면 `newUser ?? true`를 적용해 신규 사용자로 간주합니다. 약관을 잘못 건너뛰는 것보다 한 번 더 확인하는 쪽을 안전한 기본값으로 선택했습니다.
 
-### Response Interceptor
+```mermaid
+flowchart TD
+    Login[소셜 로그인 완료] --> Backend[Backend 로그인]
+    Backend --> NewUser{newUser === false?}
+    NewUser -- Yes --> Permission[알림 권한 처리]
+    Permission --> Main[Main 화면]
+    NewUser -- "No / 값 누락" --> Terms[TermsAgreementScreen]
+    Terms --> Agree{약관 동의?}
+    Agree -- Yes --> Intro[Intro Slides]
+    Intro --> Interests[관심 분야 설정]
+    Interests --> Difficulty[난이도 설정]
+    Difficulty --> Main
+    Agree -- "No / 화면 이탈" --> AutoLogout[자동 로그아웃]
+    AutoLogout --> Clear[인증 정보 정리]
+    Clear --> LoginScreen[LoginScreen]
+```
 
-- 401/403 감지 → `POST /api/auth/refresh`로 재발급 시도
-- 재발급 성공 → 새 토큰 저장 + 원래 요청 자동 재시도
-- 재발급 실패 → 토큰/유저 정보 삭제 → 온보딩 상태 초기화 → 로그인 화면 이동
-- 무한 재시도 방지: 요청별 `_retry` 플래그로 이미 재시도한 요청은 다시 재발급을 트리거하지 않음
-- 재발급 API(`/api/auth/refresh`) 자체가 401/403이면 큐 로직을 거치지 않고 바로 `clearAuthAndRedirect()`로 직행 (재발급의 재발급을 시도하지 않음)
+## 📤 Request Interceptor
 
-### 동시 401 처리 (Refresh 큐)
+- 일반 API 요청에 Access Token 자동 첨부
+- 로그인과 Refresh 같은 Public 인증 API에는 기존 Token을 첨부하지 않음
+- Debug 환경에서만 요청·응답 진단 로그 사용
 
-여러 요청이 동시에 401을 받으면 재발급 API가 중복 호출될 수 있습니다 (예: 화면 진입 시 여러 API를 병렬로 호출하는 경우). 이를 막기 위해 `client.ts`에 모듈 레벨 상태로 `isRefreshing` 플래그와 `refreshSubscribers` 대기열을 둡니다 (`src/api/client.ts:48-67, 209-296`).
+탈퇴된 계정의 Token이 남은 상태에서 새 로그인 요청에 첨부되어 서버 500이 발생한 경험을 바탕으로 Public API 제외 규칙을 추가했습니다.
 
-- 첫 번째 401: `isRefreshing = true`로 세팅하고 재발급 API를 호출. 재발급이 끝날 때까지 다른 401 요청들은 실제 재발급을 트리거하지 않는다.
-- 재발급 진행 중 도착한 나머지 401 요청들: 즉시 재발급을 시도하지 않고 `refreshSubscribers` 배열에 `{ resolve, reject }`로 쌓여서 대기한다.
-- 재발급 성공: `onRefreshSuccess(newAccessToken)`이 대기 중이던 모든 subscriber를 새 토큰으로 `resolve` → 각 원래 요청이 새 토큰을 헤더에 넣고 자동 재시도된다.
-- 재발급 실패: `onRefreshFailure`가 대기 중이던 모든 subscriber를 `reject` → 각 요청이 그대로 실패 처리된다.
+### Authorization Header 제외 경로
 
-즉 재발급 API 호출은 항상 1회로 수렴하고, 그 결과를 기다리던 모든 요청이 한꺼번에 재개되거나 한꺼번에 실패하는 구조입니다.
+| Path | Reason |
+| --- | --- |
+| `/api/auth/login/` | 인증 전 호출하는 공개 로그인 API |
+| `/api/auth/refresh` | 만료된 Access Token 대신 Refresh Token으로 갱신하는 API |
 
-### 네트워크 에러 처리
+회원탈퇴 과정의 일부 요청이 실패하면 이전 계정의 Token이 Storage에 남을 수 있습니다. 이 Token이 다른 계정의 로그인 요청에 첨부되면 Backend가 탈퇴 계정을 검증하는 과정에서 오류가 발생할 수 있으므로, 로그인과 Refresh 경로에는 기존 Access Token을 첨부하지 않습니다.
 
-401/403과 별개로, 서버 응답 자체를 받지 못한 경우(타임아웃, 연결 끊김 등 `error.response`가 없는 경우)는 재시도 없이 바로 실패 처리하고 공통 에러 토스트(`showNetworkErrorToast`)를 띄웁니다 (`src/api/client.ts:144-156`, `src/utils/errorToast.ts`).
+## 📥 Response Interceptor와 Refresh Queue
 
-- 과거에는 최대 2회까지 선형 백오프로 자동 재시도했으나, 재시도하는 동안 사용자가 아무 피드백도 못 받고 대기하는 문제가 있어 제거했습니다.
-- 4xx/5xx처럼 서버가 실제로 응답한 에러와는 `isNoResponseError`로 구분해, 토스트 문구만 다르게(네트워크 오류 vs 일반 오류) 표시합니다.
+```mermaid
+sequenceDiagram
+    participant Request as API Requests
+    participant Interceptor as Axios Response Interceptor
+    participant Queue as Subscriber Queue
+    participant Backend
+    participant Storage as AsyncStorage
 
-### 인터셉터 헤더 제외가 필요한 이유
+    Request->>Interceptor: 여러 요청에서 401/403
+    alt Refresh 진행 중
+        Interceptor->>Queue: 요청을 Queue에 등록
+    else 첫 만료 요청
+        Interceptor->>Backend: POST /api/auth/refresh
+        alt 갱신 성공
+            Backend-->>Interceptor: 새 Access Token
+            Interceptor->>Storage: Token 저장
+            Interceptor->>Queue: 대기 요청에 Token 전달
+            Queue->>Backend: 원 요청 순차 재시도
+        else 갱신 실패
+            Backend-->>Interceptor: Refresh 실패
+            Interceptor->>Storage: 인증 정보 정리
+            Interceptor-->>Request: 로그인 화면 이동
+        end
+    end
+```
 
-탈퇴 후 다른 계정으로 로그인하는 시나리오에서, `withdraw()` 흐름 중 서버 API 실패 시 `AsyncStorage.multiRemove`에 도달하지 못해 이전 계정의 stale 토큰이 잔류할 수 있습니다. 이 토큰이 소셜 로그인 API 요청에 딸려가면 서버가 탈퇴된 계정을 검증하려다 500을 반환합니다. `/api/auth/login/` 경로를 헤더 제외 대상에 추가해 해결했습니다. (`/api/auth/refresh`, `/api/auth/login/` 두 경로만 제외 대상이며 그 외 경로는 모두 헤더가 자동 첨부됩니다 — `src/api/client.ts:101-115`)
+동시에 여러 요청이 만료 응답을 받아도 Refresh API가 중복 호출되지 않도록 Queue를 사용합니다. 각 원 요청에는 재시도 여부를 기록해 무한 반복을 방지합니다.
 
-<br />
+### Response Interceptor 세부 규칙
 
-## TanStack Query 재시도 정책 (queryClient.ts)
+- 401·403을 받으면 Refresh API로 Access Token 갱신 시도
+- 요청별 `_retry` Flag로 같은 요청의 무한 재발급 방지
+- Refresh API 자체의 401·403은 Queue에 다시 넣지 않고 인증 정보 초기화
+- 갱신 성공 시 Queue의 모든 요청을 새 Token으로 재개
+- 갱신 실패 시 대기 중인 요청을 모두 Reject하고 로그인 화면으로 이동
 
-Axios 인터셉터가 이미 401/403에 대한 재발급·재시도를 전담하기 때문에, TanStack Query 레벨에서 같은 요청을 또 재시도하면 재발급 로직과 중복/경합할 수 있습니다. 그래서 `src/config/queryClient.ts:13-24`에서 401/403은 Query의 재시도 대상에서 명시적으로 제외합니다.
+```mermaid
+flowchart TD
+    Error[Response Error] --> Status{Status}
+    Status -- 401/403 --> RefreshPath{요청이 Refresh API인가?}
+    RefreshPath -- Yes --> Clear[clearAuthAndRedirect]
+    RefreshPath -- No --> Retried{_retry가 설정됐는가?}
+    Retried -- Yes --> Reject[요청 실패 처리]
+    Retried -- No --> Running{Refresh 진행 중인가?}
+    Running -- Yes --> Queue[Subscriber Queue 대기]
+    Running -- No --> Execute[Refresh API 한 번 실행]
+    Execute --> Result{성공?}
+    Result -- Yes --> Resolve[새 Token으로 Queue 전체 Resolve]
+    Resolve --> Retry[원 요청 재시도]
+    Result -- No --> RejectQueue[Queue 전체 Reject]
+    RejectQueue --> Clear
+    Status -- Other --> Network{서버 응답이 존재하는가?}
+    Network -- No --> NetworkToast[네트워크 오류 Toast]
+    Network -- Yes --> GeneralError[일반 API 오류 처리]
+```
+
+## 🌐 Network Error 처리
+
+Timeout이나 연결 끊김처럼 서버 응답 자체가 없는 오류는 401·403 Refresh 흐름과 분리합니다. `error.response` 유무를 기준으로 네트워크 오류와 서버가 응답한 4xx·5xx 오류를 구분하고 서로 다른 안내를 표시합니다.
+
+과거에는 응답 없는 요청을 최대 두 번 자동 재시도했지만, 재시도 중 사용자에게 진행 상태가 보이지 않아 대기 시간이 길어지는 문제가 있었습니다. 현재는 자동 재시도를 제거하고 즉시 공통 Network Error Toast를 표시합니다.
+
+## 🔁 TanStack Query 재시도 정책
+
+Axios Interceptor가 401·403의 Token 갱신과 원 요청 재시도를 담당합니다. TanStack Query까지 같은 요청을 다시 시도하면 Refresh 흐름이 중복되거나 경합할 수 있어 인증 오류는 Query 재시도 대상에서 제외했습니다.
 
 ```ts
 retry: (failureCount, error) => {
   const status = error?.response?.status;
   if (status === 401 || status === 403) {
-    return false; // Axios 인터셉터가 이미 처리하므로 Query는 재시도하지 않음
+    return false;
   }
   return failureCount < 1;
 },
 retryDelay: attemptIndex => Math.min(1000 * 2 ** attemptIndex, 30000),
 ```
 
-- Query(조회)는 401/403 제외 시 최대 1회 재시도
-- Mutation(변경)은 `retry: 0` — 실패 시 재시도 없음
+| Operation | Retry Policy |
+| --- | --- |
+| Query | 401·403 제외, 그 외 최대 1회 재시도 |
+| Mutation | 재시도하지 않음 (`retry: 0`) |
 
-<br />
+## ⚡ 로그인·로그아웃 비동기 작업
 
-## 로그인/로그아웃 성능 최적화 (Fire-and-forget)
+로그인 완료를 막을 필요가 없는 분석·알림 부가 작업은 Fire-and-forget으로 실행하지만, 인증 Token이 필요한 정리 API는 반드시 로컬 Token 삭제 전에 완료합니다.
 
-로그인/로그아웃 체감 속도를 높이기 위해, 응답을 기다릴 필요가 없는 부가 작업들은 `await` 없이 백그라운드로 흘려보내고 있습니다. 단, **`Authorization` 헤더가 필요한(인증 필요) 서버 API는 로컬 토큰 삭제보다 먼저 완료되어야 하므로 fire-and-forget 대상에서 제외**합니다 (아래 "로그아웃 순서 보장" 참고).
+| Task | Execution | Reason |
+| --- | --- | --- |
+| Mixpanel 사용자 식별 | Fire-and-forget | 분석 실패가 로그인 성공을 막지 않음 |
+| 로그인 후 FCM Token 등록 | Fire-and-forget | 등록 완료를 기다리지 않고 화면 진입 |
+| Social SDK 로그아웃 | Fire-and-forget | Backend Access Token과 무관 |
+| Backend 로그아웃 | 완료 대기 | Authorization Header 필요 |
+| FCM Token 비활성화 | 완료 대기 | Authorization Header 필요 |
+| 알림 상태 변경 | 완료 대기 | Authorization Header 필요 |
 
-- **로그아웃** (`src/services/authService.ts:239-288`): 서버 로그아웃 API, FCM 토큰 해제, 알림 상태 초기화는 `await Promise.allSettled([...])`로 완료를 기다린 뒤에 `AsyncStorage.multiRemove(...)`와 `resetUser()`를 진행합니다. 소셜 SDK sign-out(`signOutSocial`)만 백엔드 토큰과 무관하므로 계속 await 없이(fire-and-forget) 실행합니다. `withdraw()`(회원 탈퇴)에서도 `withdrawUser` 호출은 await하고, 이어서 `unregisterFCMToken`도 await로 완료를 기다린 뒤 로컬 토큰을 삭제합니다. `signOutSocial`만 fire-and-forget입니다 (`authService.ts:388-401`).
-- **로그인 후 부가 작업**: `saveAuthData`에서 Mixpanel `identifyUser(...)` 호출이 `.catch()`만 붙은 채 await 없이 실행됩니다 (`authService.ts:168-173`). `socialLoginService.ts`의 각 제공자별 로그인 흐름에서도 FCM 토큰 등록(`messaging().getToken().then(...).catch(...)`)이 await 없이 실행되어, 로그인 자체는 FCM 등록 완료를 기다리지 않고 반환됩니다 (예: `socialLoginService.ts:126-132, 276-283, 442-449, 602-609`).
+부가 작업의 실패는 로그인·로그아웃 성공 여부에 영향을 주지 않고 Logging으로 남깁니다. 따라서 FCM 미등록이나 분석 사용자 미식별을 놓치지 않으려면 별도의 운영 Monitoring이 필요합니다.
 
-**주의**: 이 부가 작업들이 실패해도 로그인/로그아웃 자체의 성공 여부에는 영향을 주지 않습니다. 대신 실패는 `.catch()`로 로깅만 되고 사용자에게 노출되지 않으므로, FCM 미등록이나 Mixpanel 미식별 같은 문제는 별도 모니터링이 없으면 알아차리기 어렵습니다.
+## 🚪 로그아웃·회원탈퇴 순서
 
-### 로그아웃 순서 보장 (401 레이스 컨디션 방지)
+서버 로그아웃, FCM Token 비활성화, 알림 상태 변경은 모두 인증 Token이 필요합니다. 따라서 다음 순서를 보장합니다.
 
-과거에는 로그아웃 API, FCM 토큰 해제, 알림 설정 API까지 전부 fire-and-forget으로 쏘고 곧바로 `AsyncStorage.multiRemove`로 로컬 토큰을 지웠습니다. 그런데 `client.ts`의 요청 인터셉터는 매 요청마다 `await getAuthToken()`으로 AsyncStorage에서 토큰을 **비동기로 다시 조회**하기 때문에, 이 조회가 끝나기 전에 토큰이 먼저 삭제되면 `Authorization` 헤더 없이 요청이 나가 401이 발생하는 레이스 컨디션이 있었습니다 (네이버/구글 로그아웃·탈퇴 시 401 에러로 실제 발생).
+```mermaid
+sequenceDiagram
+    actor User
+    participant Screen
+    participant Auth as authService
+    participant API as authApi / notificationApi
+    participant Social as Social SDK
+    participant Storage as AsyncStorage
+    participant Query as TanStack Query
 
-현재는 인증이 필요한 서버 API(로그아웃, FCM 해제, 알림 설정)를 `await`로 완료를 기다린 뒤에 로컬 토큰을 삭제하도록 순서를 보장합니다. 백엔드 토큰과 무관한 소셜 SDK 로그아웃(`signOutSocial`)만 계속 fire-and-forget으로 둡니다.
-
-<br />
-
-## 약관 동의 플로우
-
-약관 동의는 로그인이 **끝난 뒤**, 서버 응답의 `newUser` 값을 확인한 다음에만 노출합니다. (과거에는 로그인 실행 전에 약관 동의부터 거치는 구조였는데, 로그인 전이라 신규/기존 유저 여부를 알 수 없어 기존 유저에게도 약관 동의를 매번 보여주는 문제가 있었습니다. 이 문서화 시점에 로그인 이후로 순서를 바로잡았습니다.)
-
+    User->>Screen: 로그아웃·회원탈퇴 선택
+    Screen->>Auth: 정리 요청
+    Auth->>API: 서버 로그아웃
+    Auth->>API: FCM Token 비활성화
+    Auth->>API: 알림 상태 변경
+    Note over Auth,API: 인증이 필요한 API 완료까지 대기
+    API-->>Auth: allSettled
+    Auth->>Social: 제공자 로그아웃
+    Auth->>Storage: Token과 사용자 정보 삭제
+    Auth->>Query: queryClient.clear()
+    Auth-->>Screen: 로그인 화면 이동
 ```
-LoginScreen(버튼) → 소셜 계정 선택 → 서버 로그인(POST /api/auth/login/:provider) → newUser 분기
-  ├─ newUser === false (기존 유저) → 약관/온보딩 생략, 알림 권한 처리 후 바로 홈
-  └─ newUser !== false (신규 유저) → 알림 권한 처리 → TermsAgreementScreen
-                                        ├─ 동의 완료 → IntroSlides → Interests → DifficultySetting → 홈
-                                        └─ 동의 없이 이탈(뒤로가기 등) → 자동 로그아웃
-```
 
-### `newUser` 분기 (`LoginResponse.data.newUser`)
-
-- 타입: `src/api/authApi.ts`의 `LoginResponse.data.newUser?: boolean`
-- 값이 없으면(응답 필드 누락 등) `socialLoginService.ts`의 각 제공자별 로그인 함수가 `newUser ?? true`로 신규 유저 취급합니다(약관을 건너뛰는 쪽보다 한 번 더 보여주는 쪽이 안전하다는 판단).
-- 분기 지점: `LoginScreen.tsx`의 `handleSocialLogin` — `result.newUser === false`만 기존 유저로 취급하고, 그 외에는 전부 신규 유저 취급합니다.
-
-### 약관 동의 없이 이탈 시 자동 로그아웃
-
-`TermsAgreementScreen`에 도달한 시점에는 이미 소셜 로그인 + 서버 로그인이 끝난 상태입니다(서버에는 이미 계정이 생성되어 있음). 이 화면에서 뒤로가기 등으로 동의 없이 이탈하면, 서버 계정과 클라이언트 로그인 상태가 어긋나는 것을 막기 위해 `logout()`을 자동 호출해 로컬 토큰을 즉시 삭제합니다(`TermsAgreementScreen.tsx`의 unmount effect, `hasAgreedRef`로 정상 진행과 구분). 다음 실행 시에는 다시 로그인 화면부터 시작합니다.
+서버 API를 기다리지 않고 Token을 먼저 삭제했을 때 발생했던 401 Race Condition을 이 순서로 해결했습니다.
