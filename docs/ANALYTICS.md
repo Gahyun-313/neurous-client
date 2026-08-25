@@ -18,6 +18,21 @@ Firebase Analytics와 Mixpanel을 이용해 사용자가 어떤 화면을 거쳐
 | Authentication | 제공자별 로그인 성공·실패 |
 | Reward | 출석·기사·퀴즈·광고 등 보상 출처 |
 
+```mermaid
+flowchart LR
+    User([사용자 행동]) --> Screen[Screen · Modal · Popup]
+    Screen --> Auto{Route 기반 자동 기록?}
+    Auto -- Yes --> Root[RootNavigator Screen View]
+    Auto -- No --> Manual[logScreenView · logEvent]
+    Root --> Firebase[Firebase Analytics]
+    Manual --> Firebase
+    Manual --> Mixpanel[Mixpanel]
+    Firebase --> Analysis[화면 이동 · 학습 · 이탈 분석]
+    Mixpanel --> Analysis
+    Reward[보상 발생] --> Source[reward_source 분류]
+    Source --> Mixpanel
+```
+
 ## 🧭 설계 원칙
 
 - 이벤트 이름과 속성 Key의 규칙을 통일합니다.
