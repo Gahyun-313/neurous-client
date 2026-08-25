@@ -137,9 +137,8 @@ Android AAB 생성부터 Google Play App Signing, Firebase SHA와 소셜 로그�
 | Document | Description |
 | --- | --- |
 | [Architecture](./docs/ARCHITECTURE.md) | 앱의 계층, 상태와 데이터 흐름 |
-| [Authentication Flow](./docs/AUTHENTICATION_FLOW.md) | 소셜 로그인, JWT와 Refresh Queue |
-| [Notification Flow](./docs/NOTIFICATION_FLOW.md) | SSE·FCM 및 권한·Token 생명주기 |
+| [Authentication Flow](./docs/AUTH_FLOW.md) | 소셜 로그인, JWT와 Refresh Queue |
+| [Notification Flow](./docs/NOTIFICATION.md) | SSE·FCM 및 권한·Token 생명주기 |
 | [Analytics](./docs/ANALYTICS.md) | 사용자 행동 이벤트 설계 |
 | [Troubleshooting](./docs/TROUBLESHOOTING.md) | 개발·Release·운영 문제 해결 |
-| [Deployment](./docs/DEPLOYMENT.md) | Android Release와 환경별 설정 |
 
