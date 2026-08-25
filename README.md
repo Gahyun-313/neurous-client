@@ -1,217 +1,145 @@
-<p align="center">
-  <img src="./src/assets/png/readme_thumnail.png" alt="Neurous Banner" width="50%" />
+# 🧠 NEUROUS
+
+![React Native](https://img.shields.io/badge/React_Native-Mobile-61DAFB?style=flat-square&logo=react)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
+![Android](https://img.shields.io/badge/Android-3DDC84?style=flat-square&logo=android&logoColor=white)
+![iOS](https://img.shields.io/badge/iOS-000000?style=flat-square&logo=apple&logoColor=white)
+
+AI로 재구성한 기사를 읽고 퀴즈를 풀며 성인 문해력을 기르는 React Native 학습 애플리케이션입니다.
+
+포인트·경험치·캐릭터 성장과 미션을 학습 과정에 결합했으며, Android Release와 실제 운영 환경의 인증·알림·광고 문제를 대응했습니다.
+
+<p>
+  <img src="./src/assets/png/readme_thumnail.png" alt="Neurous Banner" width="70%" />
 </p>
 
-# Neurous (뉴로스)
+<br>
 
-성인 문해력 향상을 위한 뉴로스 모바일 애플리케이션 클라이언트 레포지토리입니다.
+## 🖼️ 주요 화면
 
-- **App ID**: `io.neurous.app`
-- **Platform**: iOS / Android (React Native CLI)
+| 홈·미션 | 학습 | 퀴즈 | 캐릭터 |
+| --- | --- | --- | --- |
+| <img src="https://github.com/user-attachments/assets/6b1a5b8d-3344-4ba9-8305-4bd62f4710b0" width="220" alt="홈과 미션 화면"> | <img src="https://github.com/user-attachments/assets/ab8618b5-cdcc-48a1-a28e-5d1a2019d6e2" width="220" alt="기사 학습 화면"> | <img src="https://github.com/user-attachments/assets/288d99c1-0318-4df0-9495-b614e9d85341" width="220" alt="퀴즈 화면"> | <img src="https://github.com/user-attachments/assets/bd60cc32-8357-47d9-ac90-6667d6f25330" width="220" alt="캐릭터 화면"> |
+| 학습 콘텐츠와 일일 미션 탐색 | AI로 재구성된 기사 읽기 | 기사 기반 퀴즈 풀기 | 포인트·경험치 기반 성장 확인 |
 
-<br />
+| 온보딩 | 탐색 | 알림 | 마이페이지 |
+| --- | --- | --- | --- |
+| <img src="https://github.com/user-attachments/assets/c2c29dc2-3238-4bb5-8dcb-d2934f19a802" width="220" alt="온보딩 화면"> | <img src="https://github.com/user-attachments/assets/815d4966-dd61-4fd7-9118-1e6c64cea168" width="220" alt="탐색 화면"> | <img src="https://github.com/user-attachments/assets/191113df-c0ec-48c2-b1ec-83603f49e4f4" width="220" alt="알림 화면"> | <img src="https://github.com/user-attachments/assets/a76d8353-de2f-4d01-b0e9-f88af34a0387" width="220" alt="마이페이지 화면"> |
+| 난이도와 관심 분야 설정 | 카테고리별 기사 탐색 | 실시간·푸시 알림 확인 | 프로필, 관심 분야와 읽은 글 관리 |
 
-## 기술 스택
+<br>
 
-| 분류               | 기술                                                                      |
-| ------------------ | ------------------------------------------------------------------------- |
-| **Core**           | React Native 0.83.1, React 19.2.0, TypeScript 5.8, Node ≥ 20              |
-| **Navigation**     | React Navigation 6 (native-stack, bottom-tabs, stack)                     |
-| **State (Client)** | Zustand 5                                                                 |
-| **State (Server)** | TanStack Query 5                                                          |
-| **Networking**     | Axios, `react-native-sse` (SSE)                                           |
-| **Storage**        | AsyncStorage                                                              |
-| **Firebase**       | App / Auth / Analytics / Messaging(FCM) 23.7                              |
-| **Social Login**   | Google, Kakao, Naver, Apple                                               |
-| **Ads**            | `react-native-google-mobile-ads` (AdMob)                                  |
-| **UI**             | `react-native-svg`, `react-native-linear-gradient`, `lottie-react-native` |
-| **Etc**            | `react-native-permissions`, `dayjs`, `patch-package`                      |
-| **Analytics**      | Firebase Analytics, Mixpanel                                              |
-| **Backend**        | Spring Boot (REST API + SSE)                                              |
+## 📖 서비스 소개
 
-<br />
+NEUROUS는 성인 사용자가 자신의 수준과 관심 분야에 맞는 기사를 읽고 퀴즈를 풀면서 문해력을 학습하는 모바일 서비스입니다. 포인트, 경험치, 캐릭터와 출석 보상을 통해 반복적인 학습 참여를 유도합니다.
 
-## 시작하기
+<br>
 
-### 요구 사항
+## 📌 프로젝트 정보
 
-- Node.js ≥ 20
-- iOS 빌드 시 macOS + Xcode + CocoaPods
+| 항목 | 내용 |
+| --- | --- |
+| 형태 | 팀 프로젝트 |
+| 플랫폼 | Android / iOS |
+| Client | React Native CLI, TypeScript |
+| App ID | `io.neurous.app` |
+| 담당 | 초기 버전 공동 개발, 이후 iOS Native 영역을 제외한 앱 전반 개발·유지보수** |
+| 배포 | Google Play Console 내부 테스트 및 Release 환경 운영 |
+| Google Play | [🍏 NEUROUS 다운로드](https://play.google.com/store/apps/details?id=io.neurous.app&pcampaignid=web_share) |
+| App Store | [🍎 NEUROUS 다운로드](https://apps.apple.com/kr/app/%EB%89%B4%EB%A1%9C%EC%8A%A4-neurous/id6757225558) |
+| 초기 버전 Repository | [SWYP-app-3-10/client](https://github.com/SWYP-app-3-10/client) |
+| 고도화 버전 Repository | [SWYP-app-3-10/neurous-client](https://github.com/SWYP-app-3-10/neurous-client) |
 
-### 설치
+<br>
 
-```bash
-# 의존성 설치 (postinstall에서 patch-package 자동 실행)
-npm install
+## 👨‍💻 담당 역할
 
-# iOS
-cd ios && pod install && cd ..
-```
+- React Native 애플리케이션 기능 개발과 유지보수
+- TanStack Query와 Zustand 기반 서버·클라이언트 상태 관리
+- Axios JWT 자동 재발급과 동시 Refresh 요청 제어
+- Google·Kakao·Naver 로그인 연동 및 Release 환경 대응
+- SSE·FCM을 이용한 앱 상태별 알림 처리
+- Firebase Analytics 이벤트 설계, Mixpanel 이벤트(디자인팀 명세 기반) 연동
+- AdMob 리워드 광고와 Release 설정 문제 대응
+- Android AAB 생성, App Signing과 Google Play 내부 테스트 운영
 
-> ⚠️ Git에 커밋되지 않는 민감 설정 파일(`GoogleService-Info.plist`, `google-services.json`, `Info.plist`, `Config.xcconfig`, 소셜 로그인 키 등)이 별도로 필요합니다. 신규 환경 세팅 시 팀에 설정 파일을 요청하세요. (누락 시 앱 화이트 스크린 / Archive 빌드 실패 발생)
+Apple 로그인은 다른 팀원이 구현했으므로 직접 구현 범위에 포함하지 않습니다.
 
-### 실행
+<br>
 
-```bash
-npm start          # Metro 번들러
-npm run ios        # iOS 실행
-npm run android    # Android 실행
-```
+## 🛠️ Tech Stack
 
-### 코드 스타일
+| Category | Stack |
+| --- | --- |
+| Core | React Native, React, TypeScript |
+| Navigation | React Navigation |
+| Server State | TanStack Query |
+| Client State | Zustand |
+| Network | Axios, SSE |
+| Storage | AsyncStorage |
+| Authentication | Google, Kakao, Naver, Apple* |
+| Service | Firebase, FCM, AdMob |
+| Analytics | Firebase Analytics, Mixpanel |
 
-커밋 전 반드시 린트를 실행하세요.
+\* Apple 로그인은 서비스에 포함되지만 본인의 주요 구현 범위는 아닙니다.
 
-```bash
-npm run lint                # ESLint 검사
-npm run lint -- --fix       # 자동 수정
-```
+<br>
 
-<br />
+## ✨ 주요 구현
 
-## 프로젝트 구조
+### 서버 상태와 UI 상태 분리
 
-```
-src/
-├── api/                  # Axios 인스턴스 및 도메인별 API 모듈
-│   ├── client.ts         # Axios 인터셉터 (JWT 자동 추가/갱신, 로깅)
-│   ├── authApi.ts        ├── userApi.ts        ├── contentApi.ts
-│   ├── missionApi.ts     ├── characterApi.ts   ├── notificationApi.ts
-│   ├── pointHistoryApi.ts├── withdrawApi.ts    └── inquiryApi.ts
-├── components/           # 공통 UI 컴포넌트
-│   ├── Button.tsx / Input.tsx / Toggle.tsx / Header.tsx ...
-│   ├── ArticleContent.tsx          # 기사 내용 (AI 재구성 안내 배너 지원)
-│   ├── NotificationModal.tsx       # 전역 알림 모달
-│   ├── BottomSheetModal.tsx        # 전역 바텀시트 모달
-│   ├── ToastModal.tsx              # 전역 토스트
-│   ├── Quiz*.tsx                   # Question / Feedback / OptionCard
-│   └── Search*.tsx, SocialLoginButton.tsx ...
-├── hooks/                # 비즈니스 로직 커스텀 훅 (React Query 포함)
-│   ├── useNotifications.ts / usePushNotification.ts / useNotificationPermission.ts
-│   ├── useArticleNavigation.ts / useExploreContents.ts
-│   ├── useMissions.ts / useQuizButton.ts / useScrollToQuiz.ts
-│   ├── useCharacter.ts / useMyPage.ts / useUpdateLevel.ts
-│   ├── useDifficulty*.ts / usePointHistory.ts / useWithdrawUser.ts ...
-├── navigation/           # 네비게이션 설정
-│   ├── RootNavigator.tsx / MainTabNavigator.tsx
-│   ├── FullScreenStackNavigator.tsx          # 탭바 없는 화면
-│   ├── Mission / Character / Search / MyPage StackNavigator.tsx
-│   ├── OnboardingNavigator.tsx
-│   └── types.ts                              # 네비게이션 타입 정의
-├── screens/              # 화면 컴포넌트
-│   ├── auth/             # 인증 (LoginScreen 등)
-│   ├── onboarding/       # 온보딩 (IntroSlide / Terms / Difficulty / Interests)
-│   ├── main/             # 메인 탭 (Mission / Character / MyPage)
-│   ├── common/           # 공통 (ArticleDetail / Quiz / AdLoading / Notification)
-│   └── search/           # 검색 관련 화면
-├── services/             # 도메인 서비스 레이어
-│   ├── socialLoginService.ts / authService.ts / authStorageService.ts
-│   ├── analyticsService.ts / onboardingService.ts
-│   └── difficultyFeedbackService.ts / recentSearches.ts
-├── store/                # Zustand 전역 상태
-│   ├── modalStore.ts / toastStore.ts / notificationStore.ts
-│   └── onboardingStore.ts / pointStore.ts / experienceStore.ts
-├── utils/                # 유틸리티 (dateUtils / myPageUtils / imageUtils ...)
-└── config/               # 환경/라우트 설정 (env / routes / queryClient / adConfig ...)
-```
+TanStack Query는 API 데이터와 캐시를, Zustand는 모달·토스트·알림과 보상 표시처럼 앱 내부 UI 상태를 담당하도록 책임을 분리했습니다.
 
-<br />
+[아키텍처 자세히 보기](./docs/ARCHITECTURE.md)
 
-## 주요 기능
+### JWT 재발급과 인증 생명주기
 
-- 소셜 로그인 4종 (Google / Kakao / Naver / Apple)
-- 온보딩 플로우 (난이도 설정, 관심분야 선택)
-- AI 재구성 기사 읽기 + 퀴즈 시스템
-- 콘텐츠 접근 3분기 (무료 열람 / 포인트 사용 / 광고 시청)
-- 포인트·경험치·캐릭터 성장 시스템
-- 미션 시스템 (일일 미션, 기사 읽기)
-- 출석 보상 (데일리 출석 + 일요일 위클리 출석 합산 지급)
-- 알림 시스템 (SSE 포그라운드 + FCM 백그라운드/종료)
-- 검색 (카테고리별 기사 검색, 실시간 결과)
-- 마이페이지 (프로필, 관심분야, 레벨, 읽은 글 목록)
-- 전역 모달·토스트 시스템
-- 리워드 광고 연동 (AdMob)
+Axios Interceptor에서 Access Token을 자동 첨부하고 만료 시 Refresh Token으로 갱신합니다. 여러 요청이 동시에 실패해도 Subscriber Queue를 통해 Refresh 요청은 한 번만 실행하고 대기 중인 요청을 순차 재시도합니다.
 
-<br />
+[인증 흐름 자세히 보기](./docs/AUTHENTICATION_FLOW.md)
 
-## 핵심 아키텍처 요약
+### 앱 상태별 알림
 
-### 계층 구조
+Foreground에서는 SSE 연결로 이벤트를 받고, Background·종료 상태에서는 FCM을 이용합니다. FCM Token 등록과 해제를 로그인·로그아웃 생명주기에 연결했습니다.
 
-```
-Screen → Hook → Store / Service → API (client.ts) → Backend
-```
+[알림 흐름 자세히 보기](./docs/NOTIFICATION_FLOW.md)
 
-- **Screen**: React Native 화면 컴포넌트
-- **Hook**: 비즈니스 로직 캡슐화 (TanStack Query 포함)
-- **Store**: Zustand 전역 상태 (point / experience / modal / notification 등)
-- **Service**: 인증·소셜 로그인·분석 등 도메인 서비스
-- **API**: Axios 기반 HTTP 클라이언트 + 인터셉터 (JWT 자동 추가/갱신)
+### 학습 행동 분석
 
-### 데이터 흐름
+화면 조회, 온보딩, 퀴즈, 검색, 보상과 캐릭터 행동을 Firebase Analytics와 Mixpanel 이벤트로 기록해 사용자의 학습 여정을 분석할 수 있도록 구성했습니다. Firebase Analytics 이벤트는 화면·행동 단위로 직접 설계했고, Mixpanel은 디자인팀이 정의한 이벤트 명세를 기준으로 구현·연동했습니다.
 
-- **요청**: Screen → Hook → API → Interceptor → Backend
-- **응답**: Backend → Interceptor → API → Hook → Store → Screen
-- **에러**: Interceptor에서 401/403 자동 재시도, 실패 시 로그아웃
+[Analytics 구성 자세히 보기](./docs/ANALYTICS.md)
 
-### 전역 모달 / 토스트
+### Release와 운영 대응
 
-어느 화면에서든 `useShowModal`, `useShowBottomSheetModal` 훅으로 호출 가능하며, 루트 레벨 렌더링으로 `goBack()` 후에도 유지됩니다.
+Android AAB 생성부터 Google Play App Signing, Firebase SHA와 소셜 로그인 키 등록, AdMob Release 설정까지 실제 Release 환경을 구성하고 환경별 오류를 해결했습니다.
 
-```typescript
-import { useShowModal } from '../store/modalStore';
+[배포·운영 경험 보기](./docs/DEPLOYMENT.md)
 
-const showModal = useShowModal();
-showModal({
-  title: '삭제하시겠습니까?',
-  primaryButton: { title: '삭제', onPress: () => {} },
-  secondaryButton: { title: '취소', onPress: () => {} },
-});
-```
+<br>
 
-<br />
+## 🔧 문제 해결
 
-## 개발 컨벤션
+- 로그아웃·회원탈퇴 API보다 Token 삭제가 먼저 실행되어 발생한 401 Race Condition 해결
+- 계정 전환 시 이전 사용자의 TanStack Query Cache가 노출되는 문제 해결
+- 캐릭터 보상 반영 시점에 맞춰 무효화와 Prefetch 정책 개선
+- Google·Kakao·Naver의 Debug·Upload·App Signing Key 차이 대응
+- AdMob App ID와 Ad Unit ID 혼동으로 Release에서만 광고가 실패한 문제 해결
+- UTC와 KST가 섞여 출석 보상·읽은 날짜가 어긋나는 문제 해결
 
-### 브랜치 네이밍
+[Troubleshooting 자세히 보기](./docs/TROUBLESHOOTING.md)
 
-| Prefix   | 용도                  |
-| -------- | --------------------- |
-| `feat/`  | 신규 기능             |
-| `fix/`   | 버그 / 깨진 상태 수정 |
-| `chore/` | 유지보수              |
-| `docs/`  | 문서                  |
+<br>
 
-### 커밋 메시지
+## 📚 Documentation
 
-`type(scope): 한글 요약` 형식, 파일/변경 단위로 커밋을 분리합니다.
+| Document | Description |
+| --- | --- |
+| [Architecture](./docs/ARCHITECTURE.md) | 앱의 계층, 상태와 데이터 흐름 |
+| [Authentication Flow](./docs/AUTHENTICATION_FLOW.md) | 소셜 로그인, JWT와 Refresh Queue |
+| [Notification Flow](./docs/NOTIFICATION_FLOW.md) | SSE·FCM 및 권한·Token 생명주기 |
+| [Analytics](./docs/ANALYTICS.md) | 사용자 행동 이벤트 설계 |
+| [Troubleshooting](./docs/TROUBLESHOOTING.md) | 개발·Release·운영 문제 해결 |
+| [Deployment](./docs/DEPLOYMENT.md) | Android Release와 환경별 설정 |
 
-```
-feat(notification): SSE 기반 포그라운드 알림 수신 구현
-fix(client): 소셜 로그인 API에 stale 토큰 첨부되는 문제 수정
-```
-
-### PR
-
-- **Squash merge** 전략 사용
-- PR 본문에 개요 / 변경 내용 / 범위 체크리스트 / 테스트 체크리스트 / 비고 포함
-
-<br />
-
-## 문서
-
-| 문서                                                           | 내용                                                             |
-| -------------------------------------------------------------- | ---------------------------------------------------------------- |
-| [`docs/technical-overview.md`](./docs/technical-overview.md)   | 스택 + 아키텍처 + 주요 플로우 + 트러블슈팅 요약 (포트폴리오용 통합 문서) |
-| [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)               | 아키텍처 다이어그램, Sequence Diagram, Request Flow              |
-| [`docs/AUTH_FLOW.md`](./docs/AUTH_FLOW.md)                     | 소셜 로그인, Firebase Auth, JWT, Axios Interceptor               |
-| [`docs/NOTIFICATION.md`](./docs/NOTIFICATION.md)               | SSE, FCM, 알림 권한, 토큰 등록/해제                              |
-| [`docs/ANALYTICS_EVENTS.md`](./docs/ANALYTICS_EVENTS.md)       | Firebase Analytics / Mixpanel 이벤트 전체 목록                   |
-| [`docs/TROUBLESHOOTING.md`](./docs/TROUBLESHOOTING.md)         | Google/Kakao/Naver 로그인, iOS Archive, Node, CocoaPods 문제     |
-| [`docs/RELEASE.md`](./docs/RELEASE.md)                         | Play Console, App Signing, versionCode, ProGuard, Firebase SHA  |
-
-<br />
-
-## 라이선스
-
-Private
