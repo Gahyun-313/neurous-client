@@ -1,103 +1,83 @@
-# 알림 시스템
+# 🔔 Notification Flow
 
-## 개요
+## 📱 앱 상태별 채널
 
-앱 상태에 따라 두 채널로 알림을 분리합니다.
-
-| 앱 상태 | 채널 | 라이브러리 |
+| App State | Channel | Role |
 | --- | --- | --- |
-| **포그라운드** | SSE (Server-Sent Events) | `react-native-sse` |
-| **백그라운드 / 종료** | FCM Push | `@react-native-firebase/messaging` |
+| Foreground | SSE | 열린 앱에 실시간 이벤트 전달 |
+| Background | FCM | OS Push Notification 전달 |
+| Terminated | FCM | 앱 종료 상태에서 Push 전달 |
 
 ```mermaid
 flowchart LR
-    subgraph 포그라운드
-        SSE["SSE 연결<br/>react-native-sse"]
-    end
-
-    subgraph 백그라운드/종료
-        FCM["FCM Push<br/>@react-native-firebase/messaging"]
-        APNs["APNs<br/>(iOS만)"]
-    end
-
-    Server["Backend<br/>(Spring Boot)"] --> SSE
-    Server --> FCM
-    FCM -- "iOS" --> APNs --> Device["📱 디바이스"]
-    FCM -- "Android" --> Device
-    SSE --> Device
+    Backend[Spring Boot Backend] --> State{App State}
+    State -- Foreground --> SSE[SSE Connection]
+    SSE --> Store[notificationStore]
+    Store --> InApp[앱 내부 알림 UI]
+    State -- Background/Terminated --> FCM[Firebase Cloud Messaging]
+    FCM --> Android[Android Push]
+    FCM --> APNs[APNs]
+    APNs --> iOS[iOS Push]
 ```
 
-<br />
+## ⚡ SSE 생명주기
 
-## SSE (포그라운드 알림)
+1. 로그인 후 SSE 연결을 시작합니다.
+2. 서버 이벤트를 수신하면 알림 Store와 화면에 반영합니다.
+3. 앱이 Background로 이동하면 연결을 해제합니다.
+4. Foreground 복귀 시 인증 상태를 확인하고 다시 연결합니다.
 
-앱이 포그라운드에 있을 때 `react-native-sse`로 서버에 연결을 유지하고 실시간 이벤트를 수신합니다.
+앱이 보이는 동안 별도의 Push Banner에만 의존하지 않고 서비스 내부 상태를 즉시 갱신하기 위한 채널입니다.
 
-### 주요 파일
+```mermaid
+stateDiagram-v2
+    [*] --> LoggedOut
+    LoggedOut --> Connected: 로그인 · Foreground
+    Connected --> Disconnected: Background 이동
+    Disconnected --> Connected: Foreground 복귀 · 인증 확인
+    Connected --> LoggedOut: 로그아웃 · 탈퇴
+    Disconnected --> LoggedOut: 로그아웃 · 탈퇴
+    LoggedOut --> [*]
+```
 
-- `hooks/useNotifications.ts` — SSE 연결 관리 및 알림 데이터 처리
+## 🔑 FCM Token 생명주기
 
-### 동작 방식
+- 로그인: FCM Token 발급 후 Backend 등록
+- 로그아웃·탈퇴: Backend에서 Token 비활성화
+- Token 갱신: 새 Token을 Backend와 동기화
 
-1. 로그인 후 SSE 연결 수립
-2. 서버에서 알림 이벤트 발생 시 실시간 수신
-3. `notificationStore`에 상태 반영
-4. 앱이 백그라운드로 전환되면 연결 해제
+```mermaid
+sequenceDiagram
+    participant App
+    participant FCM
+    participant Backend
 
-<br />
+    App->>FCM: 로그인 후 Token 요청
+    FCM-->>App: FCM Token
+    App->>Backend: Token 등록
+    FCM-->>App: Token 갱신 이벤트
+    App->>Backend: 새 Token 동기화
+    App->>Backend: 로그아웃·탈퇴 시 Token 비활성화
+```
 
-## FCM (백그라운드/종료 상태 알림)
+Token 등록 여부와 사용자의 알림 설정은 별개의 개념입니다. Token은 로그인 생명주기에, 알림 허용 상태는 OS 권한에 맞춰 관리합니다.
 
-앱이 백그라운드이거나 종료된 상태에서는 FCM을 통해 푸시 알림을 수신합니다.
+## 🔄 권한 동기화
 
-### 주요 파일
-
-- `hooks/usePushNotification.ts` — FCM 토큰 발급, 백그라운드 핸들러 등록
-
-### FCM 토큰 생명주기
-
-FCM 토큰의 등록/해제는 **로그인·로그아웃 생명주기**에 연결합니다. 알림 설정 토글의 역할이 아닙니다.
-
-| 시점 | 동작 | API |
-| --- | --- | --- |
-| **로그인** | FCM 토큰 발급 + 서버 등록 | `POST /api/notification/token` |
-| **로그아웃** | 서버에서 토큰 비활성화 | `PATCH /api/notification/token/deactivate` |
-
-### iOS APNs 제약
-
-iOS에서 FCM은 반드시 APNs(Apple Push Notification service)를 통해 라우팅되며, 우회할 수 없습니다. Firebase Console에 APNs 인증 키(`.p8` 파일)를 등록해야 iOS 푸시가 동작합니다.
-
-<br />
-
-## 알림 권한
-
-### OS 권한이 Source of Truth
-
-알림 on/off의 최종 권한은 OS 설정입니다. 서버의 `notificationStatus`는 OS 권한 상태를 따릅니다.
+OS 알림 권한을 Source of Truth로 사용합니다.
 
 ```mermaid
 flowchart TD
-    OSPerm["OS 알림 권한 확인"] --> Granted{권한 부여?}
-    Granted -- Yes --> SyncOn["서버에 notificationStatus = ON 동기화"]
-    Granted -- No --> SyncOff["서버에 notificationStatus = OFF 동기화"]
+    Check[OS 알림 권한 확인] --> Permission{Permission 상태}
+    Permission -- Granted --> On[Backend notificationStatus ON]
+    Permission -- Denied --> Off[Backend notificationStatus OFF]
+    On --> Sync[로그인·설정 변경 시 동기화]
+    Off --> Sync
 ```
 
-### 알림 상태 동기화 지점
+로그인, 로그아웃과 설정 Toggle 변경 시 Backend 상태를 동기화합니다. iOS에서는 FCM이 APNs를 통해 전달되므로 Firebase Console에 APNs 인증 키가 필요합니다.
 
-서버에 `PATCH /api/user/notification`을 호출하는 3가지 시점:
+## ✅ 읽음 상태
 
-1. **로그인 시** — OS 권한 확인 후 서버 상태 동기화
-2. **로그아웃 시** — 알림 비활성화
-3. **설정 토글 변경 시** — 사용자가 앱 내 알림 설정을 변경할 때
-
-### 주요 파일
-
-- `hooks/useNotificationPermission.ts` — OS 알림 권한 요청 및 상태 확인
-- `hooks/useTrackingPermission.ts` — iOS ATT 권한 (광고 추적)
-- `store/notificationStore.ts` — 알림 상태 전역 관리
-
-<br />
-
-## 알림 읽음 상태
-
-서버와 읽음 상태(`isRead`)를 동기화합니다. 사용자가 알림을 확인하면 `PATCH /api/user/notification`으로 읽음 처리합니다.
+사용자가 알림을 확인하면 서버의 읽음 상태와 동기화합니다. 알림 목록의 표시 상태를 단순 로컬 값으로만 유지하지 않아 재로그인과 다른 기기에서도 일관된 상태를 유지합니다.
+z
