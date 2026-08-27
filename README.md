@@ -93,13 +93,13 @@ TanStack Query는 API 데이터와 캐시를, Zustand는 모달·토스트·알�
 
 Axios Interceptor에서 Access Token을 자동 첨부하고 만료 시 Refresh Token으로 갱신합니다. 여러 요청이 동시에 실패해도 Subscriber Queue를 통해 Refresh 요청은 한 번만 실행하고 대기 중인 요청을 순차 재시도합니다.
 
-[인증 흐름 자세히 보기](./docs/AUTHENTICATION_FLOW.md)
+[인증 흐름 자세히 보기](./docs/AUTH_FLOW.md)
 
 ### 앱 상태별 알림
 
 Foreground에서는 SSE 연결로 이벤트를 받고, Background·종료 상태에서는 FCM을 이용합니다. FCM Token 등록과 해제를 로그인·로그아웃 생명주기에 연결했습니다.
 
-[알림 흐름 자세히 보기](./docs/NOTIFICATION_FLOW.md)
+[알림 흐름 자세히 보기](./docs/NOTIFICATION.md)
 
 ### 학습 행동 분석
 
