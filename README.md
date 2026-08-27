@@ -63,8 +63,6 @@ NEUROUS는 성인 사용자가 자신의 수준과 관심 분야에 맞는 기�
 - AdMob 리워드 광고와 Release 설정 문제 대응
 - Android AAB 생성, App Signing과 Google Play 내부 테스트 운영
 
-Apple 로그인은 다른 팀원이 구현했으므로 직접 구현 범위에 포함하지 않습니다.
-
 <br>
 
 ## 🛠️ Tech Stack
@@ -80,8 +78,6 @@ Apple 로그인은 다른 팀원이 구현했으므로 직접 구현 범위에 �
 | Authentication | Google, Kakao, Naver, Apple* |
 | Service | Firebase, FCM, AdMob |
 | Analytics | Firebase Analytics, Mixpanel |
-
-\* Apple 로그인은 서비스에 포함되지만 본인의 주요 구현 범위는 아닙니다.
 
 <br>
 
@@ -107,7 +103,7 @@ Foreground에서는 SSE 연결로 이벤트를 받고, Background·종료 상태
 
 ### 학습 행동 분석
 
-화면 조회, 온보딩, 퀴즈, 검색, 보상과 캐릭터 행동을 Firebase Analytics와 Mixpanel 이벤트로 기록해 사용자의 학습 여정을 분석할 수 있도록 구성했습니다. Firebase Analytics 이벤트는 화면·행동 단위로 직접 설계했고, Mixpanel은 디자인팀이 정의한 이벤트 명세를 기준으로 구현·연동했습니다.
+화면 조회, 온보딩, 퀴즈, 검색, 보상과 캐릭터 행동을 Firebase Analytics와 Mixpanel 이벤트로 기록해 사용자의 학습 여정을 분석할 수 있도록 구성했습니다. Firebase Analytics, Mixpanel은 디자인팀이 정의한 이벤트 명세를 기준으로 구현·연동했습니다.
 
 [Analytics 구성 자세히 보기](./docs/ANALYTICS.md)
 
