@@ -2,7 +2,7 @@
 
 ## 🎯 목적
 
-Firebase Analytics와 Mixpanel을 이용해 사용자가 어떤 화면을 거쳐 학습하고 어디에서 이탈하거나 보상을 얻는지 확인할 수 있도록 이벤트를 구성했습니다. Firebase Analytics 이벤트는 화면·행동 단위로 직접 설계했고, Mixpanel의 이벤트는 디자인팀이 정의한 이벤트 명세를 기준으로 구현·연동했습니다.
+Firebase Analytics와 Mixpanel을 이용해 사용자가 어떤 화면을 거쳐 학습하고 어디에서 이탈하거나 보상을 얻는지 확인할 수 있도록 이벤트를 구성했습니다. Firebase Analytics, Mixpanel의 이벤트는 디자인팀이 정의한 이벤트 명세를 기준으로 구현·연동했습니다.
 
 ## 🧩 이벤트 영역
 
