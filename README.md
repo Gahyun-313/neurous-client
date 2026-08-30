@@ -39,7 +39,9 @@ NEUROUS는 성인 사용자가 자신의 수준과 관심 분야에 맞는 기�
 
 | 항목 | 내용 |
 | --- | --- |
+| 기간 | 2025.12 ~ 진행 중 |
 | 형태 | 팀 프로젝트 |
+| 인원 | Android 1명 / Backend 1명 / PM 1명 / Designer 1명 |
 | 플랫폼 | Android / iOS |
 | Client | React Native CLI, TypeScript |
 | App ID | `io.neurous.app` |
