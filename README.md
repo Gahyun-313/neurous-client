@@ -45,7 +45,7 @@ NEUROUS는 성인 사용자가 자신의 수준과 관심 분야에 맞는 기�
 | 플랫폼 | Android / iOS |
 | Client | React Native CLI, TypeScript |
 | App ID | `io.neurous.app` |
-| 담당 | 초기 버전 공동 개발, 이후 iOS Native 영역을 제외한 앱 전반 개발·유지보수** |
+| 담당 | 초기 버전 공동 개발, 이후 iOS Native 영역을 제외한 앱 전반 개발·유지보수 |
 | 배포 | Google Play Console 내부 테스트 및 Release 환경 운영 |
 | Google Play | [🍏 NEUROUS 다운로드](https://play.google.com/store/apps/details?id=io.neurous.app&pcampaignid=web_share) |
 | App Store | [🍎 NEUROUS 다운로드](https://apps.apple.com/kr/app/%EB%89%B4%EB%A1%9C%EC%8A%A4-neurous/id6757225558) |
