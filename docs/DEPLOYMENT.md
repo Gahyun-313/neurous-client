@@ -43,3 +43,4 @@ Play App Signing으로 전환한 뒤 Store가 최종 APK를 다시 서명하므�
 - Naver 로그인: R8 난독화로 Callback 동작 실패
 - AdMob: App ID와 Ad Unit ID 혼동 및 계정 불일치
 - Firebase: 설정 파일 누락 시 White Screen과 Archive 실패
+
