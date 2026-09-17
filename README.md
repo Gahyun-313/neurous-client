@@ -77,7 +77,7 @@ NEUROUS는 성인 사용자가 자신의 수준과 관심 분야에 맞는 기�
 | Client State | Zustand |
 | Network | Axios, SSE |
 | Storage | AsyncStorage |
-| Authentication | Google, Kakao, Naver, Apple* |
+| Authentication | Google, Kakao, Naver |
 | Service | Firebase, FCM, AdMob |
 | Analytics | Firebase Analytics, Mixpanel |
 
@@ -139,4 +139,3 @@ Android AAB 생성부터 Google Play App Signing, Firebase SHA와 소셜 로그�
 | [Notification Flow](./docs/NOTIFICATION.md) | SSE·FCM 및 권한·Token 생명주기 |
 | [Analytics](./docs/ANALYTICS.md) | 사용자 행동 이벤트 설계 |
 | [Troubleshooting](./docs/TROUBLESHOOTING.md) | 개발·Release·운영 문제 해결 |
-
