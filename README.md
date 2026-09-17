@@ -13,13 +13,13 @@ AI로 재구성한 기사를 읽고 퀴즈를 풀며 성인 문해력을 기르�
 
 | 홈·미션 | 기사 학습 | 퀴즈 | 캐릭터 |
 | --- | --- | --- | --- |
-| `<홈 또는 미션 화면 첨부>` | `<기사 화면 첨부>` | `<퀴즈 화면 첨부>` | `<캐릭터 화면 첨부>` |
-| 학습 콘텐츠와 일일 미션 탐색 | AI로 재구성된 기사 읽기 | 기사 기반 문제 풀이와 피드백 | 포인트·경험치 기반 성장 확인 |
+| <img src="https://github.com/user-attachments/assets/6b1a5b8d-3344-4ba9-8305-4bd62f4710b0" width="220" alt="홈과 미션 화면"> | <img src="https://github.com/user-attachments/assets/ab8618b5-cdcc-48a1-a28e-5d1a2019d6e2" width="220" alt="기사 학습 화면"> | <img src="https://github.com/user-attachments/assets/288d99c1-0318-4df0-9495-b614e9d85341" width="220" alt="퀴즈 화면"> | <img src="https://github.com/user-attachments/assets/bd60cc32-8357-47d9-ac90-6667d6f25330" width="220" alt="캐릭터 화면"> |
+| 학습 콘텐츠와 일일 미션 탐색 | AI로 재구성된 기사 읽기 | 기사 기반 퀴즈 풀기 | 포인트·경험치 기반 성장 확인 |
 
-| 온보딩 | 검색 | 알림 | 마이페이지 |
+| 온보딩 | 탐색 | 알림 | 마이페이지 |
 | --- | --- | --- | --- |
-| `<온보딩 화면 첨부>` | `<검색 화면 첨부>` | `<알림 화면 첨부>` | `<마이페이지 화면 첨부>` |
-| 난이도와 관심 분야 설정 | 카테고리별 기사 검색 | 실시간·푸시 알림 확인 | 프로필, 관심 분야와 읽은 글 관리 |
+| <img src="https://github.com/user-attachments/assets/c2c29dc2-3238-4bb5-8dcb-d2934f19a802" width="220" alt="온보딩 화면"> | <img src="https://github.com/user-attachments/assets/815d4966-dd61-4fd7-9118-1e6c64cea168" width="220" alt="탐색 화면"> | <img src="https://github.com/user-attachments/assets/191113df-c0ec-48c2-b1ec-83603f49e4f4" width="220" alt="알림 화면"> | <img src="https://github.com/user-attachments/assets/a76d8353-de2f-4d01-b0e9-f88af34a0387" width="220" alt="마이페이지 화면"> |
+| 난이도와 관심 분야 설정 | 카테고리별 기사 탐색 | 실시간·푸시 알림 확인 | 프로필, 관심 분야와 읽은 글 관리 |
 
 ## 📖 서비스 소개
 
@@ -29,14 +29,16 @@ NEUROUS는 성인 사용자가 자신의 수준과 관심 분야에 맞는 기�
 
 | 항목 | 내용 |
 | --- | --- |
-| 형태 | 팀 프로젝트 |
+| 형태 | 4인 팀 프로젝트 (PM 1, 디자이너 1, 앱 1, 백엔드 1) |
 | 플랫폼 | Android / iOS |
 | Client | React Native CLI, TypeScript |
 | App ID | `io.neurous.app` |
-| 담당 | 초기 버전 공동 개발, 이후 iOS Native 영역을 제외한 앱 전반 개발·유지보수** |
+| 담당 | 초기 버전 공동 개발, 이후 iOS Native 영역을 제외한 앱 전반 개발·유지보수 |
 | 배포 | Google Play Console 내부 테스트 및 Release 환경 운영 |
-
-\*\* 초기 버전 대비 파일 159개를 1:1로 비교했을 때 신규 추가 36개, 로직 변경 19개, 나머지는 기존 구조를 유지했습니다.
+| 🍏 Google Play | [NEUROUS 다운로드](https://play.google.com/store/apps/details?id=io.neurous.app&pcampaignid=web_share) |
+| 🍎 App Store | [NEUROUS 다운로드](https://apps.apple.com/kr/app/%EB%89%B4%EB%A1%9C%EC%8A%A4-neurous/id6757225558) |
+| 초기 버전 Repository | [SWYP-app-3-10/client](https://github.com/SWYP-app-3-10/client) |
+| 고도화 버전 Repository | [SWYP-app-3-10/neurous-client](https://github.com/SWYP-app-3-10/neurous-client) |
 
 ## 👨‍💻 담당 역할
 
@@ -45,11 +47,9 @@ NEUROUS는 성인 사용자가 자신의 수준과 관심 분야에 맞는 기�
 - Axios JWT 자동 재발급과 동시 Refresh 요청 제어
 - Google·Kakao·Naver 로그인 연동 및 Release 환경 대응
 - SSE·FCM을 이용한 앱 상태별 알림 처리
-- Firebase Analytics 이벤트 설계, Mixpanel 이벤트(디자인팀 명세 기반) 연동
+- Firebase Analytics 이벤트, Mixpanel 이벤트를 디자인팀 명세 기반으로 연동
 - AdMob 리워드 광고와 Release 설정 문제 대응
 - Android AAB 생성, App Signing과 Google Play 내부 테스트 운영
-
-Apple 로그인은 다른 팀원이 구현했으므로 직접 구현 범위에 포함하지 않습니다.
 
 ## 🛠️ Tech Stack
 
@@ -61,11 +61,9 @@ Apple 로그인은 다른 팀원이 구현했으므로 직접 구현 범위에 �
 | Client State | Zustand |
 | Network | Axios, SSE |
 | Storage | AsyncStorage |
-| Authentication | Google, Kakao, Naver, Apple* |
+| Authentication | Google, Kakao, Naver |
 | Service | Firebase, FCM, AdMob |
 | Analytics | Firebase Analytics, Mixpanel |
-
-\* Apple 로그인은 서비스에 포함되지만 본인의 주요 구현 범위는 아닙니다.
 
 ## ✨ 주요 구현
 
