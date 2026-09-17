@@ -9,6 +9,10 @@ AI로 재구성한 기사를 읽고 퀴즈를 풀며 성인 문해력을 기르�
 
 포인트·경험치·캐릭터 성장과 미션을 학습 과정에 결합했으며, Android Release와 실제 운영 환경의 인증·알림·광고 문제를 대응했습니다.
 
+<p>
+  <img src="./src/assets/png/readme_thumnail.png" alt="Neurous Banner" width="70%" />
+</p>
+
 ## 🖼️ 주요 화면
 
 | 홈·미션 | 기사 학습 | 퀴즈 | 캐릭터 |
